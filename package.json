@@ -1,0 +1,11 @@
+{
+  "name": "uno-no-mercy",
+  "private": true,
+  "packageManager": "bun@1.4.3",
+  "scripts": {
+    "setup": "bun install --cwd backend && bun install --cwd frontend",
+    "dev": "bun scripts/dev.ts",
+    "check": "bun run --cwd backend check && bun run --cwd frontend check",
+    "build": "bun run --cwd backend typecheck && bun run --cwd frontend build"
+  }
+}
