@@ -17,6 +17,8 @@ type GameBoardProps = {
 };
 
 export function GameBoard({ direction = "clockwise", stackedCards = [] }: GameBoardProps) {
+  const stackOffsetStep = Math.min(5, 15 / Math.max(stackedCards.length, 1));
+
   return (
     <motion.section
       animate={{ opacity: 1, scale: 1 }}
@@ -46,18 +48,22 @@ export function GameBoard({ direction = "clockwise", stackedCards = [] }: GameBo
             <GameCard card={findCard("blue-0")} size="large" />
             {stackedCards.length > 0 && (
               <div className="pile__power-stack" aria-label="Stacked power cards" role="group">
-                {stackedCards.map((card, index) => (
-                  <div
-                    className="pile__stacked-card"
-                    key={`${card.id}-${index}`}
-                    style={{
-                      zIndex: index + 1,
-                      transform: `translate(${(index + 1) * 5}px, ${-(index + 1) * 5}px) rotate(${index % 2 === 0 ? -2 : 2}deg)`,
-                    }}
-                  >
-                    <GameCard card={card} size="large" />
-                  </div>
-                ))}
+                {stackedCards.map((card, index) => {
+                  const offset = (index + 1) * stackOffsetStep;
+
+                  return (
+                    <div
+                      className="pile__stacked-card"
+                      key={`${card.id}-${index}`}
+                      style={{
+                        zIndex: index + 1,
+                        transform: `translate(${offset}px, ${-offset}px) rotate(${index % 2 === 0 ? -2 : 2}deg)`,
+                      }}
+                    >
+                      <GameCard card={card} size="large" />
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

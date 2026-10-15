@@ -212,6 +212,22 @@ describe("game board shell", () => {
       "blue Draw 2 card",
       "Wild Draw 4 card",
     ]);
+    const layers = stack.querySelectorAll<HTMLElement>(".pile__stacked-card");
+    expect(Array.from(layers, (layer) => layer.style.zIndex)).toEqual(["1", "2"]);
+
+    rerender(
+      <GameBoard
+        stackedCards={Array.from({ length: 8 }, () => findCard("blue-draw-two"))}
+      />,
+    );
+
+    const longStackLayers = screen
+      .getByRole("group", { name: "Stacked power cards" })
+      .querySelectorAll<HTMLElement>(".pile__stacked-card");
+    const newestLayer = longStackLayers.item(longStackLayers.length - 1);
+
+    expect(newestLayer.style.zIndex).toBe("8");
+    expect(newestLayer.style.transform).toContain("translate(15px, -15px)");
   });
 
   test("removes raw direction glyphs from the miniature gameboard preview", () => {
