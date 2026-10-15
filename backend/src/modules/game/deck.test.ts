@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CARD_FACES, createDeck, shuffleDeck } from "./deck";
+import { CARD_FACES, createDeck, MULTIPLICITIES, shuffleDeck } from "./deck";
 
 describe("canonical No Mercy deck", () => {
   test("creates the canonical 168-card deck", () => {
@@ -46,6 +46,23 @@ describe("canonical No Mercy deck", () => {
     expect(CARD_FACES.some(({ faceId }) => faceId === "wild")).toBe(false);
     expect(CARD_FACES.some(({ faceId }) => faceId === "wild-draw-4")).toBe(false);
     expect(CARD_FACES.some(({ faceId }) => faceId === "wild-reverse-draw-4")).toBe(true);
+  });
+
+  test("exports the canonical face multiplicities", () => {
+    expect(MULTIPLICITIES).toEqual({
+      number: 2,
+      skip: 3,
+      reverse: 3,
+      "draw-2": 3,
+      "draw-4": 2,
+      "discard-all": 3,
+      "skip-everyone": 2,
+      "wild-reverse-draw-4": 8,
+      "wild-color-roulette": 8,
+      "draw-6": 4,
+      "draw-10": 4,
+    });
+    expect(Object.isFrozen(MULTIPLICITIES)).toBe(true);
   });
 
   test("does not expose mutable face definitions", () => {

@@ -29,7 +29,7 @@ export const CARD_FACES: readonly CardFace[] = Object.freeze(
   cardFaces.map((face) => Object.freeze(face)),
 );
 
-const MULTIPLICITIES: Readonly<Record<CardKind, number>> = Object.freeze({
+export const MULTIPLICITIES: Readonly<Record<CardKind, number>> = Object.freeze({
   number: 2,
   skip: 3,
   reverse: 3,
