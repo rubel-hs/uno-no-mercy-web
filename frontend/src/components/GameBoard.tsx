@@ -1,6 +1,7 @@
 import { motion } from "motion/react";
 
-import { cardBack, findCard } from "../game/cards";
+import directionIcon from "../assets/icons/game_direction.png";
+import { cardBack, findCard, type CardDefinition } from "../game/cards";
 import { GameCard } from "./GameCard";
 import { PlayerSeat } from "./PlayerSeat";
 
@@ -10,7 +11,12 @@ const playerHand = [
   findCard("yellow-skip"), findCard("red-1"),
 ];
 
-export function GameBoard() {
+type GameBoardProps = {
+  direction?: "clockwise" | "counterclockwise";
+  stackedCards?: CardDefinition[];
+};
+
+export function GameBoard({ direction = "clockwise", stackedCards = [] }: GameBoardProps) {
   return (
     <motion.section
       animate={{ opacity: 1, scale: 1 }}
@@ -35,16 +41,42 @@ export function GameBoard() {
             <span className="pile__count">84</span>
             <GameCard card={cardBack} size="large" />
           </div>
-          <div className="direction-indicator" aria-label="Play direction: clockwise"><span>↻</span></div>
           <div className="pile pile--discard">
             <span className="pile__echo" aria-hidden="true" />
             <GameCard card={findCard("blue-0")} size="large" />
+            {stackedCards.length > 0 && (
+              <div className="pile__power-stack" aria-label="Stacked power cards" role="group">
+                {stackedCards.map((card, index) => (
+                  <div
+                    className="pile__stacked-card"
+                    key={`${card.id}-${index}`}
+                    style={{
+                      zIndex: index + 1,
+                      transform: `translate(${(index + 1) * 5}px, ${-(index + 1) * 5}px) rotate(${index % 2 === 0 ? -2 : 2}deg)`,
+                    }}
+                  >
+                    <GameCard card={card} size="large" />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
-        <div className="table-callouts">
-          <span><i className="status-dot status-dot--red" />Stack <b>+6</b></span>
-          <span><i className="status-dot status-dot--blue" />Color <b>Blue</b></span>
-          <span><i className="status-dot status-dot--white" />Direction <b>↻</b></span>
+        <div className="game-status-rail" aria-label="Table status and actions" role="group">
+          <div className="game-status-stack" aria-label="Stack penalty: draw 6">
+            <span>Stack</span>
+            <strong>+6</strong>
+          </div>
+          <div className="game-status-color" aria-label="Current color: blue" role="img" />
+          <div className="game-status-direction">
+            <img
+              alt={`Play direction: ${direction}`}
+              className={`game-direction-icon game-direction-icon--${direction}`}
+              draggable={false}
+              src={directionIcon}
+            />
+          </div>
+          <button className="pass-button" type="button" aria-label="Pass turn">Pass</button>
         </div>
       </div>
 

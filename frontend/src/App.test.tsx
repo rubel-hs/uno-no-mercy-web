@@ -1,7 +1,9 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import App from "./App";
+import { GameBoard } from "./components/GameBoard";
+import { findCard } from "./game/cards";
 import "./index.css";
 
 afterEach(cleanup);
@@ -137,6 +139,89 @@ describe("game board shell", () => {
     expect(screen.queryByText("Discard")).not.toBeInTheDocument();
   });
 
+  test("moves the table status into a compact control rail beside the piles", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open dev mode" }));
+    fireEvent.click(screen.getByRole("button", { name: "Inspect gameboard" }));
+
+    const table = screen.getByRole("region", { name: "UNO No Mercy game table" });
+    const playZone = table.querySelector<HTMLElement>(".play-zone");
+    const statusRail = within(table).getByRole("group", { name: "Table status and actions" });
+
+    expect(playZone).not.toBeNull();
+    expect(within(playZone!).queryByLabelText("Play direction: clockwise")).not.toBeInTheDocument();
+    expect(within(statusRail!).getByLabelText("Stack penalty: draw 6")).toBeInTheDocument();
+    expect(
+      within(statusRail!).getByRole("img", { name: "Play direction: clockwise" }),
+    ).toBeInTheDocument();
+    expect(getComputedStyle(statusRail).justifyContent).toBe("space-evenly");
+    expect(getComputedStyle(statusRail).rowGap).toBe("0px");
+  });
+
+  test("shows the active color as an unlabeled diamond and offers a visual-only pass button", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open dev mode" }));
+    fireEvent.click(screen.getByRole("button", { name: "Inspect gameboard" }));
+
+    const table = screen.getByRole("region", { name: "UNO No Mercy game table" });
+    const colorDiamond = within(table).getByLabelText("Current color: blue");
+
+    expect(colorDiamond).toHaveTextContent("");
+    expect(within(table).getByRole("button", { name: "Pass turn" })).toBeInTheDocument();
+  });
+
+  test("uses the supplied direction artwork for clockwise play", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open dev mode" }));
+    fireEvent.click(screen.getByRole("button", { name: "Inspect gameboard" }));
+
+    const directionIcon = screen.getByRole("img", { name: "Play direction: clockwise" });
+
+    expect(directionIcon.tagName).toBe("IMG");
+    expect(directionIcon.getAttribute("src")).toContain("game_direction.png");
+    expect(getComputedStyle(directionIcon).transform).toBe("none");
+  });
+
+  test("mirrors the direction artwork for counterclockwise play", () => {
+    render(<GameBoard direction="counterclockwise" />);
+
+    const directionIcon = screen.getByRole("img", {
+      name: "Play direction: counterclockwise",
+    });
+
+    expect(directionIcon.getAttribute("src")).toContain("game_direction.png");
+    expect(getComputedStyle(directionIcon).transform).toBe("scaleX(-1)");
+  });
+
+  test("layers supplied power cards over the discard pile and keeps the newest card on top", () => {
+    const { rerender } = render(<GameBoard />);
+
+    expect(screen.queryByRole("group", { name: "Stacked power cards" })).not.toBeInTheDocument();
+
+    rerender(
+      <GameBoard stackedCards={[findCard("blue-draw-two"), findCard("wild-draw-4")]} />,
+    );
+
+    const stack = screen.getByRole("group", { name: "Stacked power cards" });
+    const stackedCards = within(stack).getAllByRole("article");
+
+    expect(stackedCards.map((card) => card.getAttribute("aria-label"))).toEqual([
+      "blue Draw 2 card",
+      "Wild Draw 4 card",
+    ]);
+  });
+
+  test("removes raw direction glyphs from the miniature gameboard preview", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open dev mode" }));
+
+    expect(screen.queryAllByText("↻", { exact: true })).toHaveLength(0);
+  });
+
   test("disables native dragging for card artwork", () => {
     render(<App />);
 
@@ -167,6 +252,26 @@ describe("game board shell", () => {
     expect(currentPlayers).toHaveLength(1);
     expect(screen.queryByText("Current turn")).not.toBeInTheDocument();
     expect(screen.queryByText("Your move")).not.toBeInTheDocument();
+  });
+
+  test("keeps the current-player bar compact with a centered 200px content gap", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open dev mode" }));
+    fireEvent.click(screen.getByRole("button", { name: "Inspect gameboard" }));
+
+    const playerBar = document.querySelector<HTMLElement>(
+      ".player-seat--bottom .player-seat__meta",
+    );
+    const currentPlayerLabel = within(playerBar!).getByText("Current player");
+    const score = playerBar!.querySelector<HTMLElement>(".player-seat__score");
+
+    expect(playerBar).not.toBeNull();
+    expect(getComputedStyle(playerBar!).width).toBe("max-content");
+    expect(getComputedStyle(playerBar!).columnGap).toBe("200px");
+    expect(getComputedStyle(currentPlayerLabel).fontSize).toBe("10.88px");
+    expect(getComputedStyle(currentPlayerLabel).lineHeight).toBe("1");
+    expect(getComputedStyle(score!).lineHeight).toBe("1");
   });
 
   test("opens the complete card catalog and returns to dev mode", () => {

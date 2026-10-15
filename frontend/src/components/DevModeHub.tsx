@@ -1,5 +1,6 @@
 import { motion } from "motion/react";
 
+import directionIcon from "../assets/icons/game_direction.png";
 import { cardBack, findCard } from "../game/cards";
 import { GameCard } from "./GameCard";
 
@@ -94,7 +95,7 @@ export function DevModeHub({ onBack, onInspectGameboard, onViewCards }: DevModeH
                       <span className="mini-pile__count">84</span>
                       <GameCard alignFlat card={cardBack} />
                     </div>
-                    <div className="mini-direction">↻</div>
+                    <div className="mini-direction"><img alt="" draggable={false} src={directionIcon} /></div>
                     <div className="mini-pile mini-pile--discard">
                       <span className="mini-pile__echo" />
                       <GameCard alignFlat card={miniDiscard} />
@@ -103,7 +104,7 @@ export function DevModeHub({ onBack, onInspectGameboard, onViewCards }: DevModeH
                   <div className="mini-callouts">
                     <span className="mini-callout--red">+6</span>
                     <span className="mini-callout--blue">Blue</span>
-                    <span className="mini-callout--white">↻</span>
+                    <span className="mini-callout--white"><img alt="" draggable={false} src={directionIcon} /></span>
                   </div>
                 </div>
 
