@@ -54,7 +54,7 @@ export function CardDevMode({ onClose }: CardDevModeProps) {
               {group.cards.map((card) => (
                 <div className="card-specimen" key={card.id}>
                   <GameCard card={card} size="medium" />
-                  <code>{card.assetFile}</code>
+                  <code title={card.assetFile}>{card.assetFile}</code>
                 </div>
               ))}
             </div>

@@ -199,4 +199,22 @@ describe("game board shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Return to dev mode" }));
     expect(screen.getByRole("heading", { name: "Dev mode" })).toBeInTheDocument();
   });
+
+  test("displays full filenames for card specimens without truncation ellipsis", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open dev mode" }));
+    fireEvent.click(screen.getByRole("button", { name: "View all cards" }));
+
+    const filenameElements = document.querySelectorAll<HTMLElement>(".card-specimen code");
+    expect(filenameElements.length).toBeGreaterThan(0);
+
+    const firstFilename = filenameElements[0];
+    expect(firstFilename.textContent).toBe("red-0.webp");
+    expect(firstFilename.getAttribute("title")).toBe("red-0.webp");
+
+    const computed = getComputedStyle(firstFilename);
+    expect(computed.textOverflow).not.toBe("ellipsis");
+    expect(computed.whiteSpace).toBe("normal");
+  });
 });
