@@ -1,0 +1,559 @@
+import { describe, expect, test } from "bun:test";
+import { createDeck } from "../game/deck";
+import type { ClientCommand, ClientEnvelope, PlayerSnapshot, ServerMessage } from "../game/game.protocol";
+import type { PhysicalCard } from "../game/game.types";
+import { AcceptedCommandHistory, createRoomStore } from "./room.store";
+import type { RoomCredentials, RoomPeer, RoomResult, RoomStoreDeps } from "./room.types";
+
+class FakeClock {
+  time = 1_000;
+  private nextId = 0;
+  readonly timers = new Map<number, { at: number; callback: () => void }>();
+  now = () => this.time;
+  setTimeout = (callback: () => void, delay: number) => {
+    const id = ++this.nextId;
+    this.timers.set(id, { at: this.time + delay, callback });
+    return id;
+  };
+  clearTimeout = (id: unknown) => { this.timers.delete(id as number); };
+  advance(ms: number) {
+    const end = this.time + ms;
+    for (;;) {
+      const next = [...this.timers].filter(([, timer]) => timer.at <= end).sort((a, b) => a[1].at - b[1].at || a[0] - b[0])[0];
+      if (!next) break;
+      this.time = next[1].at;
+      this.timers.delete(next[0]);
+      next[1].callback();
+    }
+    this.time = end;
+  }
+}
+
+function peer(id: string, onClose?: () => void) {
+  const messages: ServerMessage[] = [];
+  const closes: { code?: number; reason?: string }[] = [];
+  return {
+    id, messages, closes,
+    send(message: ServerMessage) { messages.push(structuredClone(message)); },
+    close(code?: number, reason?: string) { closes.push({ code, reason }); onClose?.(); },
+  } satisfies RoomPeer & { messages: ServerMessage[]; closes: { code?: number; reason?: string }[] };
+}
+
+function value<T>(result: RoomResult<T>): T {
+  if (!result.ok) throw new Error(`Expected success, received ${result.code}`);
+  return result.value;
+}
+
+function envelope(command: ClientCommand, revision: number, commandId = "command"): ClientEnvelope {
+  return { version: 1, type: "command", commandId, revision, command };
+}
+
+function latest(connection: ReturnType<typeof peer>): PlayerSnapshot {
+  const message = connection.messages.filter((message) => message.type === "snapshot").at(-1);
+  if (!message || message.type !== "snapshot") throw new Error("Expected snapshot");
+  return message.snapshot;
+}
+
+function harness(overrides: Partial<RoomStoreDeps> = {}) {
+  const clock = new FakeClock();
+  let codes = 0;
+  let tokens = 0;
+  let cards = 0;
+  const store = createRoomStore({
+    now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+    roomCodeFactory: () => ["ABCDEF", "GHJKLM", "NPQRST"][codes++]!,
+    tokenFactory: () => `secret-token-${++tokens}`,
+    cardIdFactory: () => `card-${++cards}`,
+    random: () => 0.999999,
+    ...overrides,
+  });
+  return { store, clock };
+}
+
+// Real canonical cards + a Fisher-Yates random stream arrange actual engine deals.
+// No room internals or engine transitions are replaced or mutated by the fixtures.
+function dealRandom(hands: string[][], top = "red-5"): () => number {
+  let id = 0;
+  const original = createDeck(() => `card-${++id}`);
+  const remaining = [...original];
+  const take = (faceId: string) => {
+    const index = remaining.findIndex((card) => card.faceId === faceId);
+    if (index < 0) throw new Error(`Fixture exhausted ${faceId}`);
+    return remaining.splice(index, 1)[0]!;
+  };
+  const desired: PhysicalCard[] = [];
+  for (let round = 0; round < 7; round++) for (const hand of hands) desired.push(take(hand[round]!));
+  desired.push(take(top), ...remaining);
+  const shuffled = [...original];
+  const samples: number[] = [];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = shuffled.findIndex((card) => card.instanceId === desired[i]!.instanceId);
+    samples.push((j + 0.5) / (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
+  }
+  samples.push(0.999999); // The last dealer makes seat zero the first actor.
+  return () => samples.shift() ?? 0.999999;
+}
+
+const defaultHands = [
+  ["red-draw-4", "red-1", "red-2", "red-3", "red-4", "red-8", "red-9"],
+  ["wild-draw-6", "blue-1", "blue-2", "blue-3", "blue-4", "blue-8", "blue-9"],
+  ["green-draw-4", "green-1", "green-2", "green-3", "green-4", "green-8", "green-9"],
+  ["yellow-draw-4", "yellow-1", "yellow-2", "yellow-3", "yellow-4", "yellow-8", "yellow-9"],
+  ["red-draw-2", "red-1", "red-2", "red-3", "red-4", "red-8", "red-9"],
+  ["blue-draw-2", "blue-1", "blue-2", "blue-3", "blue-4", "blue-8", "blue-9"],
+];
+
+function lobby(count = 3, overrides: Partial<RoomStoreDeps> = {}) {
+  const { store, clock } = harness(overrides);
+  const seats: RoomCredentials[] = [value(store.createRoom("Alice"))];
+  for (let i = 1; i < count; i++) seats.push(value(store.joinRoom(seats[0]!.roomCode, ["Bob", "Carol", "Dan", "Eve", "Finn"][i - 1]!)));
+  const peers = seats.map((seat, index) => {
+    const connection = peer(`peer-${index}`);
+    expect(value(store.connect(seat.roomCode, seat.token, connection)).playerId).toBe(seat.playerId);
+    return connection;
+  });
+  const roomCode = seats[0]!.roomCode;
+  let commandId = 0;
+  const command = (index: number, command: ClientCommand, id = `cmd-${++commandId}`) =>
+    store.handleCommand(roomCode, seats[index]!.playerId, envelope(command, store.getRoom(roomCode)!.revision, id));
+  return { store, clock, seats, peers, roomCode, command };
+}
+
+function game(hands = defaultHands.slice(0, 3)) {
+  const result = lobby(hands.length, { random: dealRandom(hands) });
+  value(result.command(0, { type: "start-game" }));
+  const state = () => result.store.getRoom(result.roomCode)!.game!;
+  const play = (index: number, faceId: string, id?: string) => {
+    const card = state().players[index]!.hand.find((card) => card.faceId === faceId);
+    if (!card) throw new Error(`No ${faceId} in seat ${index}`);
+    return result.command(index, { type: "play-card", cardId: card.instanceId }, id);
+  };
+  return { ...result, state, play };
+}
+
+describe("room creation and lobby", () => {
+  // Break caught: collisions overwrite rooms/seats or private credentials are reused.
+  test("retries room code and token collisions without overwriting existing rooms", () => {
+    const codes = ["ABCDEF", "ABCDEF", "GHJKLM"];
+    const tokens = ["one", "one", "two", "two", "three"];
+    const { store } = harness({ roomCodeFactory: () => codes.shift()!, tokenFactory: () => tokens.shift()! });
+    const first = value(store.createRoom(" Alice "));
+    const second = value(store.createRoom("Bob"));
+    const third = value(store.joinRoom(first.roomCode, "Carol"));
+    expect([first.roomCode, second.roomCode]).toEqual(["ABCDEF", "GHJKLM"]);
+    expect([first.token, second.token, third.token]).toEqual(["one", "two", "three"]);
+    expect(new Set([first.playerId, second.playerId, third.playerId]).size).toBe(3);
+    expect(store.getRoom(first.roomCode)!.players.map(({ name }) => name)).toEqual(["Alice", "Carol"]);
+  });
+
+  // Break caught: default identifiers contain ambiguous symbols or insufficient secret entropy.
+  test("production credentials use six unambiguous symbols and 32-byte base64url tokens", () => {
+    const clock = new FakeClock();
+    const store = createRoomStore({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout });
+    const credentials = value(store.createRoom("Alice"));
+    expect(credentials.roomCode).toMatch(/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/);
+    expect(credentials.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(Buffer.from(credentials.token, "base64url")).toHaveLength(32);
+  });
+
+  // Break caught: malformed input throws, mutates membership, or bypasses trimmed/case-folded uniqueness.
+  test("validates names and normalized duplicates before room mutation", () => {
+    const { store } = harness();
+    for (const name of ["", " \t\n", "x".repeat(25), null, {}, 7]) expect(store.createRoom(name)).toMatchObject({ ok: false, code: "INVALID_NAME" });
+    const host = value(store.createRoom(" Alice "));
+    for (const name of ["alice", " ALICE "]) expect(store.joinRoom(" abcdef ", name)).toMatchObject({ ok: false, code: "DUPLICATE_NAME" });
+    for (const name of ["", "x".repeat(25), null]) expect(store.joinRoom(host.roomCode, name)).toMatchObject({ ok: false, code: "INVALID_NAME" });
+    expect(value(store.joinRoom(" abcdef ", "x".repeat(24))).roomCode).toBe("ABCDEF");
+    expect(store.getRoom(host.roomCode)!.players).toHaveLength(2);
+    for (const code of ["NOPE", "ABC0EF", null, {}]) expect(store.joinRoom(code, "Bob")).toMatchObject({ ok: false, code: "ROOM_NOT_FOUND" });
+  });
+
+  test("host alone cannot start, non-host cannot start, and six is the seat limit", () => {
+    const room = lobby(1);
+    expect(room.command(0, { type: "start-game" })).toMatchObject({ ok: false, code: "NOT_ENOUGH_PLAYERS" });
+    const second = value(room.store.joinRoom(room.roomCode, "Bob"));
+    expect(room.store.handleCommand(room.roomCode, second.playerId, envelope({ type: "start-game" }, room.store.getRoom(room.roomCode)!.revision))).toMatchObject({ ok: false, code: "NOT_HOST" });
+    for (const name of ["Carol", "Dan", "Eve", "Finn"]) value(room.store.joinRoom(room.roomCode, name));
+    expect(room.store.joinRoom(room.roomCode, "Grace")).toMatchObject({ ok: false, code: "ROOM_FULL" });
+    value(room.command(0, { type: "start-game" }));
+    expect(room.store.getRoom(room.roomCode)!.game!.players.map(({ hand }) => hand.length)).toEqual([7, 7, 7, 7, 7, 7]);
+    expect(room.store.joinRoom(room.roomCode, "Grace")).toMatchObject({ ok: false, code: "ROOM_STARTED" });
+  });
+
+  test("intentional lobby leave transfers host and immediately deletes the empty room", () => {
+    const room = lobby(2);
+    value(room.command(0, { type: "leave-room" }));
+    expect(room.store.getRoom(room.roomCode)!.hostPlayerId).toBe(room.seats[1]!.playerId);
+    expect(latest(room.peers[1]!).allowedControls).not.toContain("start-game");
+    value(room.command(1, { type: "leave-room" }));
+    expect(room.store.getRoom(room.roomCode)).toBeNull();
+    expect(room.clock.timers.size).toBe(0);
+    expect(room.peers.map(({ closes }) => closes.length)).toEqual([1, 1]);
+    expect(room.store.connect(room.roomCode, room.seats[0]!.token, peer("late"))).toMatchObject({ ok: false, code: "ROOM_NOT_FOUND" });
+  });
+
+  // Break caught: abandoned REST-only seats leak, or host authority is stranded after their deadline.
+  test("initial connection grace removes abandoned seats and transfers host at 50 seconds", () => {
+    const { store, clock } = harness();
+    const first = value(store.createRoom("Alice"));
+    clock.advance(1_000);
+    const second = value(store.joinRoom(first.roomCode, "Bob"));
+    clock.advance(48_999);
+    expect(store.getRoom(first.roomCode)!.players).toHaveLength(2);
+    clock.advance(1);
+    expect(store.getRoom(first.roomCode)!.hostPlayerId).toBe(second.playerId);
+    expect(store.getRoom(first.roomCode)!.players).toHaveLength(1);
+    clock.advance(1_000);
+    expect(store.getRoom(first.roomCode)).toBeNull();
+    expect(clock.timers.size).toBe(0);
+  });
+
+  test("connecting before the initial deadline cancels that seat's expiry", () => {
+    const { store, clock } = harness();
+    const seat = value(store.createRoom("Alice"));
+    clock.advance(49_999);
+    value(store.connect(seat.roomCode, seat.token, peer("first")));
+    clock.advance(100_000);
+    expect(store.getRoom(seat.roomCode)!.players).toHaveLength(1);
+    expect(clock.timers.size).toBe(0);
+  });
+});
+
+describe("command ordering and private views", () => {
+  test("rejects invalid identity and malformed commands without changing the room", () => {
+    const room = game();
+    const before = room.store.getRoom(room.roomCode);
+    expect(room.store.connect(room.roomCode, "wrong-token", peer("intruder"))).toMatchObject({ ok: false, code: "INVALID_TOKEN" });
+    expect(room.store.handleCommand(room.roomCode, "intruder", envelope({ type: "leave-room" }, before!.revision))).toMatchObject({ ok: false, code: "PLAYER_NOT_FOUND" });
+    expect(room.store.handleCommand(room.roomCode, room.seats[1]!.playerId, envelope({ type: "play-card", cardId: room.state().players[0]!.hand[0]!.instanceId, playerId: room.seats[0]!.playerId } as ClientCommand, before!.revision))).toMatchObject({ ok: false, code: "INVALID_MESSAGE" });
+    for (const invalid of [null, "not JSON", {}, { ...envelope({ type: "leave-room" }, before!.revision), revision: -1 }]) {
+      expect(room.store.handleCommand(room.roomCode, room.seats[0]!.playerId, invalid)).toMatchObject({ ok: false, code: "INVALID_MESSAGE" });
+    }
+    expect(room.store.getRoom(room.roomCode)).toEqual(before);
+  });
+
+  test("rejects duplicates before stale revisions and never applies an accepted play twice", () => {
+    const room = game();
+    const before = room.state();
+    const message = envelope({ type: "play-card", cardId: before.players[0]!.hand.find(({ faceId }) => faceId === "red-1")!.instanceId }, before.revision, "once");
+    value(room.store.handleCommand(room.roomCode, room.seats[0]!.playerId, message));
+    expect(room.state().revision).toBe(before.revision + 1);
+    expect(room.state().players[0]!.hand).toHaveLength(6);
+    const after = room.state();
+    expect(room.store.handleCommand(room.roomCode, room.seats[0]!.playerId, message)).toMatchObject({ ok: false, code: "DUPLICATE_COMMAND" });
+    expect(room.store.handleCommand(room.roomCode, room.seats[1]!.playerId, { ...message, commandId: "fresh" })).toMatchObject({ ok: false, code: "STALE_REVISION", revision: after.revision });
+    expect(room.state()).toEqual(after);
+  });
+
+  test("rejected commands do not poison IDs and each player's ID namespace is independent", () => {
+    const room = lobby(2);
+    expect(room.command(1, { type: "start-game" }, "retry")).toMatchObject({ ok: false, code: "NOT_HOST" });
+    value(room.command(0, { type: "leave-room" }, "retry"));
+    value(room.command(1, { type: "leave-room" }, "retry"));
+    expect(room.store.getRoom(room.roomCode)).toBeNull();
+  });
+
+  // Break caught: using an unbounded or off-by-one history; rejections are never passed to remember.
+  test("accepted history evicts exactly the oldest ID after 256 newer accepted commands", () => {
+    const history = new AcceptedCommandHistory();
+    for (let i = 0; i < 256; i++) history.add(`accepted-${i}`);
+    expect(history.has("accepted-0")).toBe(true);
+    history.add("accepted-256");
+    expect(history.has("accepted-0")).toBe(false);
+    expect(history.has("accepted-1")).toBe(true);
+    expect(history.has("accepted-256")).toBe(true);
+    history.add("accepted-257");
+    expect(history.has("accepted-1")).toBe(false);
+    expect(history.has("accepted-2")).toBe(true);
+  });
+
+  test("broadcasts fresh independently projected snapshots with room metadata and no secrets", () => {
+    const room = game();
+    const state = room.state();
+    for (let index = 0; index < 3; index++) {
+      const snapshot = latest(room.peers[index]!);
+      expect(snapshot).toMatchObject({ roomCode: room.roomCode, hostPlayerId: room.seats[0]!.playerId, viewerId: room.seats[index]!.playerId, revision: state.revision });
+      expect(snapshot.hand).toEqual(state.players[index]!.hand);
+      expect(snapshot.players.map(({ name, online }) => ({ name, online }))).toEqual([
+        { name: "Alice", online: true }, { name: "Bob", online: true }, { name: "Carol", online: true },
+      ]);
+      const json = JSON.stringify(snapshot);
+      for (const secret of [...room.seats.map(({ token }) => token), ...state.drawPile.map(({ instanceId }) => instanceId)]) expect(json).not.toContain(`"${secret}"`);
+      for (const opponent of state.players.filter((_, other) => other !== index)) for (const card of opponent.hand) expect(json).not.toContain(`"${card.instanceId}"`);
+      expect(json).not.toMatch(/token|reconnectDeadline|timers|drawPile/);
+    }
+    latest(room.peers[0]!).players[0]!.name = "Tampered";
+    expect(latest(room.peers[1]!).players[0]!.name).toBe("Alice");
+    expect(room.store.getRoom(room.roomCode)!.players[0]!.name).toBe("Alice");
+  });
+
+  test("inspection copies cannot mutate authoritative hands or membership", () => {
+    const room = game();
+    const copy = room.store.getRoom(room.roomCode)!;
+    copy.players.length = 0;
+    copy.game!.players[0]!.hand.length = 0;
+    expect(room.state().players[0]!.hand).toHaveLength(7);
+    expect(room.store.getRoom(room.roomCode)!.players).toHaveLength(3);
+  });
+});
+
+describe("disconnect, reconnect and cleanup", () => {
+  test("disconnect preserves the full hand and eligibility until exactly 50,000ms", () => {
+    const room = game();
+    const hand = room.state().players[0]!.hand;
+    room.store.disconnect(room.roomCode, room.seats[0]!.playerId, room.peers[0]!.id);
+    expect(latest(room.peers[1]!).players[0]!.online).toBe(false);
+    room.clock.advance(49_999);
+    expect(room.state().players[0]).toMatchObject({ hand, eliminated: false });
+    expect(room.state().currentPlayerId).toBe(room.seats[0]!.playerId);
+    room.clock.advance(1);
+    expect(room.state().players[0]).toMatchObject({ hand: [], eliminated: true });
+    expect(room.state().currentPlayerId).toBe(room.seats[1]!.playerId);
+    expect(room.state().drawPile.some((card) => hand.some((held) => held.instanceId === card.instanceId))).toBe(false);
+    expect(room.store.connect(room.roomCode, room.seats[0]!.token, peer("expired"))).toMatchObject({ ok: false, code: "INVALID_TOKEN" });
+    expect(room.clock.timers.size).toBe(0);
+  });
+
+  test("reconnect cancels expiry, preserves identity and hand, and ignores superseded callbacks", () => {
+    const room = game();
+    const hand = room.state().players[0]!.hand;
+    room.store.disconnect(room.roomCode, room.seats[0]!.playerId, room.peers[0]!.id);
+    const canceled = [...room.clock.timers.values()][0]!.callback;
+    room.clock.advance(49_999);
+    const replacement = peer("replacement");
+    expect(value(room.store.connect(room.roomCode, room.seats[0]!.token, replacement)).playerId).toBe(room.seats[0]!.playerId);
+    expect(latest(replacement).hand).toEqual(hand);
+    canceled();
+    room.clock.advance(100_000);
+    expect(room.state().players[0]).toMatchObject({ hand, eliminated: false });
+    expect(latest(room.peers[1]!).players[0]!.online).toBe(true);
+    expect(room.clock.timers.size).toBe(0);
+  });
+
+  test("replacing a live peer closes it once and its close cannot disconnect the replacement", () => {
+    const room = lobby(2);
+    const old = peer("old", () => room.store.disconnect(room.roomCode, room.seats[0]!.playerId, "old"));
+    value(room.store.connect(room.roomCode, room.seats[0]!.token, old));
+    const replacement = peer("replacement");
+    value(room.store.connect(room.roomCode, room.seats[0]!.token, replacement));
+    expect(old.closes).toHaveLength(1);
+    expect(room.peers[0]!.closes).toHaveLength(1);
+    expect(latest(replacement).players[0]!.online).toBe(true);
+    room.store.disconnect(room.roomCode, room.seats[0]!.playerId, "old");
+    expect(room.clock.timers.size).toBe(0);
+    value(room.command(0, { type: "leave-room" }));
+    expect(replacement.closes).toHaveLength(1);
+    expect(old.closes).toHaveLength(1);
+  });
+
+  test("duplicate close events cannot extend the deadline or create multiple timers", () => {
+    const room = game();
+    room.store.disconnect(room.roomCode, room.seats[0]!.playerId, room.peers[0]!.id);
+    room.clock.advance(20_000);
+    room.store.disconnect(room.roomCode, room.seats[0]!.playerId, room.peers[0]!.id);
+    expect(room.clock.timers.size).toBe(1);
+    room.clock.advance(30_000);
+    expect(room.state().players[0]!.eliminated).toBe(true);
+  });
+
+  test("a late reconnect is rejected even before a delayed expiry callback executes", () => {
+    const room = game();
+    room.store.disconnect(room.roomCode, room.seats[0]!.playerId, room.peers[0]!.id);
+    room.clock.time += 50_000;
+    expect(room.store.connect(room.roomCode, room.seats[0]!.token, peer("too-late"))).toMatchObject({ ok: false, code: "INVALID_TOKEN" });
+    expect(room.state().players[0]!.eliminated).toBe(true);
+    expect(room.clock.timers.size).toBe(0);
+  });
+
+  // Break caught: a delayed timer lets the next command select a seat past its deadline.
+  test("commands settle overdue grace before validating revision or mutating the engine", () => {
+    const room = game();
+    room.store.disconnect(room.roomCode, room.seats[1]!.playerId, room.peers[1]!.id);
+    const before = room.state();
+    const cardId = before.players[0]!.hand.find(({ faceId }) => faceId === "red-1")!.instanceId;
+    const command = envelope({ type: "play-card", cardId }, before.revision, "after-deadline");
+    room.clock.time += 50_000; // Simulate an event loop whose timer callback is delayed.
+    expect(room.store.handleCommand(room.roomCode, room.seats[0]!.playerId, command)).toMatchObject({ ok: false, code: "STALE_REVISION", revision: before.revision + 1 });
+    expect(room.state().players[1]!.eliminated).toBe(true);
+    expect(room.state().players[0]!.hand).toEqual(before.players[0]!.hand);
+    value(room.store.handleCommand(room.roomCode, room.seats[0]!.playerId, { ...command, revision: before.revision + 1 }));
+    expect(room.state().currentPlayerId).toBe(room.seats[2]!.playerId);
+    expect(room.clock.timers.size).toBe(0);
+  });
+
+  test("joining releases an expired lobby name even when its timer callback is delayed", () => {
+    const room = lobby(2);
+    room.store.disconnect(room.roomCode, room.seats[1]!.playerId, room.peers[1]!.id);
+    room.clock.time += 50_000;
+    const replacement = value(room.store.joinRoom(room.roomCode, "Bob"));
+    expect(replacement.playerId).not.toBe(room.seats[1]!.playerId);
+    expect(room.store.getRoom(room.roomCode)!.players.map(({ name }) => name)).toEqual(["Alice", "Bob"]);
+    expect(room.clock.timers.size).toBe(1); // Only the new seat's initial connection grace.
+  });
+
+  // Break caught: a throwing transport becomes untracked without being closed.
+  test("a failed send closes that peer once and starts grace without aborting other broadcasts", () => {
+    const room = lobby(2);
+    let closes = 0;
+    const broken: RoomPeer = {
+      id: "broken", send() { throw new Error("Transport unavailable"); }, close() { closes++; },
+    };
+    value(room.store.connect(room.roomCode, room.seats[0]!.token, broken));
+    expect(closes).toBe(1);
+    expect(latest(room.peers[1]!).players[0]!.online).toBe(false);
+    expect(room.clock.timers.size).toBe(1);
+    room.clock.advance(50_000);
+    expect(room.store.getRoom(room.roomCode)!.players).toHaveLength(1);
+    expect(closes).toBe(1);
+  });
+
+  test.each(["leave", "expire"] as const)("%s resolves the last-player winner and completed room lifetime", (mode) => {
+    const room = game(defaultHands.slice(0, 2));
+    if (mode === "leave") value(room.command(0, { type: "leave-room" }));
+    else {
+      room.store.disconnect(room.roomCode, room.seats[0]!.playerId, room.peers[0]!.id);
+      room.clock.advance(50_000);
+    }
+    expect(room.state()).toMatchObject({ phase: "finished", winner: room.seats[1]!.playerId, pendingChoice: null, drawStack: null });
+    expect(room.state().players[0]).toMatchObject({ eliminated: true, hand: [] });
+    room.store.disconnect(room.roomCode, room.seats[1]!.playerId, room.peers[1]!.id);
+    room.clock.advance(49_999);
+    expect(room.store.getRoom(room.roomCode)).not.toBeNull();
+    room.clock.advance(1);
+    expect(room.store.getRoom(room.roomCode)).toBeNull();
+    expect(room.clock.timers.size).toBe(0);
+  });
+
+  test("intentional departures delete completed rooms and cancel outstanding timers", () => {
+    const room = game(defaultHands.slice(0, 2));
+    room.store.disconnect(room.roomCode, room.seats[1]!.playerId, room.peers[1]!.id);
+    const callback = [...room.clock.timers.values()][0]!.callback;
+    value(room.command(0, { type: "leave-room" }));
+    value(room.command(1, { type: "leave-room" }));
+    expect(room.store.getRoom(room.roomCode)).toBeNull();
+    expect(room.clock.timers.size).toBe(0);
+    callback();
+    room.clock.advance(100_000);
+    expect(room.store.getRoom(room.roomCode)).toBeNull();
+    expect(room.peers[0]!.closes).toHaveLength(1);
+  });
+});
+
+describe("pending-state departure recovery", () => {
+  test("color choice remains usable after reconnect with its exact accumulated stack", () => {
+    const room = game();
+    value(room.play(0, "red-draw-4"));
+    value(room.play(1, "wild-draw-6"));
+    const before = room.state();
+    room.store.disconnect(room.roomCode, room.seats[1]!.playerId, room.peers[1]!.id);
+    room.clock.advance(49_999);
+    expect(room.state()).toMatchObject({ phase: "awaiting-choice", pendingChoice: { type: "choose-color", playerId: room.seats[1]!.playerId }, drawStack: { amount: 10, minimumDrawValue: 6 }, currentPlayerId: room.seats[1]!.playerId });
+    const replacement = peer("replacement");
+    value(room.store.connect(room.roomCode, room.seats[1]!.token, replacement));
+    expect(latest(replacement).hand).toEqual(before.players[1]!.hand);
+    expect(latest(replacement).allowedControls).toContain("choose-color");
+    value(room.command(1, { type: "choose-color", color: "blue" }));
+    expect(room.state()).toMatchObject({ phase: "playing", pendingChoice: null, drawStack: { amount: 10, minimumDrawValue: 6 }, currentPlayerId: room.seats[2]!.playerId });
+  });
+
+  // Break caught: clearing/duplicating the stacked total or stranding an eliminated choice owner.
+  test("expiring a color-choice owner carries the existing stack once to the next eligible seat", () => {
+    const room = game(defaultHands.slice(0, 4));
+    value(room.play(0, "red-draw-4"));
+    value(room.play(1, "wild-draw-6"));
+    value(room.command(2, { type: "leave-room" }));
+    const before = room.state();
+    room.store.disconnect(room.roomCode, room.seats[1]!.playerId, room.peers[1]!.id);
+    room.clock.advance(50_000);
+    expect(room.state()).toMatchObject({ phase: "playing", pendingChoice: null, activeColor: "red", drawStack: { amount: 10, minimumDrawValue: 6 }, currentPlayerId: room.seats[3]!.playerId });
+    expect(room.state().drawPile).toEqual(before.drawPile);
+    expect(room.state().discardPile).toEqual(before.discardPile);
+    value(room.command(3, { type: "accept-draw" }));
+    expect(room.state().players[3]!.hand).toHaveLength(17);
+    expect(room.state().drawPile).toHaveLength(before.drawPile.length - 10);
+    expect(room.state().drawStack).toBeNull();
+    expect(room.state().currentPlayerId).toBe(room.seats[0]!.playerId);
+  });
+
+  test("active draw stack remains intact through disconnect and reconnect", () => {
+    const room = game();
+    value(room.play(0, "red-draw-4"));
+    room.store.disconnect(room.roomCode, room.seats[1]!.playerId, room.peers[1]!.id);
+    room.clock.advance(49_999);
+    expect(room.state()).toMatchObject({ drawStack: { amount: 4, minimumDrawValue: 4 }, currentPlayerId: room.seats[1]!.playerId });
+    const replacement = peer("stack-reconnect");
+    value(room.store.connect(room.roomCode, room.seats[1]!.token, replacement));
+    expect(latest(replacement).allowedControls).toContain("accept-draw");
+    value(room.command(1, { type: "accept-draw" }));
+    expect(room.state().players[1]!.hand).toHaveLength(11);
+    expect(room.state().drawStack).toBeNull();
+  });
+
+  test("expiring a stack recipient skips eliminated seats but keeps grace seats eligible", () => {
+    const room = game(defaultHands);
+    value(room.command(2, { type: "leave-room" }));
+    value(room.command(4, { type: "leave-room" }));
+    value(room.play(0, "red-draw-4"));
+    const before = room.state();
+    room.store.disconnect(room.roomCode, room.seats[1]!.playerId, room.peers[1]!.id);
+    room.clock.advance(1_000);
+    room.store.disconnect(room.roomCode, room.seats[3]!.playerId, room.peers[3]!.id);
+    room.clock.advance(49_000);
+    expect(room.state()).toMatchObject({ phase: "playing", drawStack: { amount: 4, minimumDrawValue: 4 }, currentPlayerId: room.seats[3]!.playerId });
+    expect(room.state().players[3]!.eliminated).toBe(false);
+    expect(room.state().drawPile).toEqual(before.drawPile);
+    room.clock.advance(1_000);
+    expect(room.state().currentPlayerId).toBe(room.seats[5]!.playerId);
+    value(room.command(5, { type: "accept-draw" }));
+    expect(room.state().players[5]!.hand).toHaveLength(11);
+    expect(room.state().drawStack).toBeNull();
+  });
+
+  test.each(["red-7", "wild-color-roulette"])("expiring the impossible %s owner clears its choice without drawing or transferring cards", (face) => {
+    const hands = defaultHands.slice(0, 3).map((hand) => [...hand]);
+    hands[0]![0] = face;
+    const room = game(hands);
+    value(room.play(0, face));
+    const owner = face === "red-7" ? 0 : 1;
+    const before = room.state();
+    room.store.disconnect(room.roomCode, room.seats[owner]!.playerId, room.peers[owner]!.id);
+    room.clock.advance(50_000);
+    expect(room.state()).toMatchObject({ phase: "playing", pendingChoice: null, currentPlayerId: room.seats[owner + 1]!.playerId });
+    expect(room.state().drawPile).toEqual(before.drawPile);
+    expect(room.state().players[owner + 1]!.hand).toEqual(before.players[owner + 1]!.hand);
+  });
+
+  test("expiry follows reversed direction after a wild reverse and never re-adds its penalty", () => {
+    const hands = defaultHands.slice(0, 4).map((hand) => [...hand]);
+    hands[0]![0] = "wild-reverse-draw-4";
+    const room = game(hands);
+    value(room.play(0, "wild-reverse-draw-4"));
+    value(room.command(3, { type: "leave-room" }));
+    room.store.disconnect(room.roomCode, room.seats[0]!.playerId, room.peers[0]!.id);
+    room.clock.advance(50_000);
+    expect(room.state()).toMatchObject({ direction: -1, currentPlayerId: room.seats[2]!.playerId, phase: "playing", pendingChoice: null, drawStack: { amount: 4, minimumDrawValue: 4 } });
+  });
+});
+
+describe("serialized UNO command races", () => {
+  test.each(["declare-first", "catch-first"] as const)("%s resolves once and rejects duplicate and stale competitors", (order) => {
+    const hands = defaultHands.slice(0, 3).map((hand) => [...hand]);
+    hands[0] = ["red-discard-all", "red-1", "red-2", "red-3", "red-4", "red-8", "yellow-1"];
+    const room = game(hands);
+    value(room.play(0, "red-discard-all"));
+    const revision = room.state().revision;
+    const declaration = envelope({ type: "declare-uno" }, revision, "uno");
+    const catchCommand = envelope({ type: "catch-uno", targetPlayerId: room.seats[0]!.playerId }, revision, "catch");
+    const [firstSeat, first, otherSeat, other] = order === "declare-first"
+      ? [0, declaration, 1, catchCommand] as const : [1, catchCommand, 0, declaration] as const;
+    value(room.store.handleCommand(room.roomCode, room.seats[firstSeat]!.playerId, first));
+    expect(room.state().revision).toBe(revision + 1);
+    expect(room.state().players[0]!.hand).toHaveLength(order === "declare-first" ? 1 : 3);
+    expect(room.store.handleCommand(room.roomCode, room.seats[firstSeat]!.playerId, first)).toMatchObject({ ok: false, code: "DUPLICATE_COMMAND" });
+    expect(room.store.handleCommand(room.roomCode, room.seats[otherSeat]!.playerId, other)).toMatchObject({ ok: false, code: "STALE_REVISION" });
+    expect(room.store.handleCommand(room.roomCode, room.seats[otherSeat]!.playerId, { ...other, revision: revision + 1 })).toMatchObject({ ok: false, code: "uno-unavailable" });
+    expect(room.state().revision).toBe(revision + 1);
+    expect(room.state().players[0]!.hand).toHaveLength(order === "declare-first" ? 1 : 3);
+  });
+});
