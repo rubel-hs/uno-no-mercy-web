@@ -144,16 +144,16 @@ describe("normal turns", () => {
   });
 
   // Catches skipping a playable action or wild while searching for a number.
-  test.each(["red-skip", "wild-draw-6"])("immediately plays drawn %s and leaves its effect pending", (faceId) => {
+  test.each(["red-skip", "wild-draw-6"])("immediately plays drawn %s and resolves or requests its choice", (faceId) => {
     const state = drawFixture({ drawPile: [card("action", faceId), card("later", "red-9")] });
     const result = applyGameCommand(state, { type: "draw-until-playable", playerId: "a" });
     expect(result.ok).toBe(true);
     expect(result.state.discardPile.at(-1)).toEqual(card("action", faceId));
     expect(result.state.drawPile).toEqual([card("later", "red-9")]);
     expect(result.state.players[0]!.hand).toHaveLength(1);
-    expect(result.state.phase).toBe("pending-effect");
-    expect(result.state.pendingChoice).toEqual({ type: "resolve-action", playerId: "a", cardId: "action" });
-    expect(result.state.currentPlayerId).toBe("a");
+    expect(result.state.phase).toBe(faceId === "red-skip" ? "playing" : "awaiting-choice");
+    expect(result.state.pendingChoice).toEqual(faceId === "red-skip" ? null : { type: "choose-color", playerId: "a" });
+    expect(result.state.currentPlayerId).toBe(faceId === "red-skip" ? "c" : "a");
     expect(result.state.revision).toBe(1);
   });
 
@@ -161,6 +161,184 @@ describe("normal turns", () => {
   test("advances counterclockwise when direction is reversed", () => {
     const result = applyGameCommand(fixture({ direction: -1 }), { type: "play-card", playerId: "a", cardId: "red" });
     expect(result.state.currentPlayerId).toBe("c");
+  });
+});
+
+function actionFixture(faceId: string, count = 3): GameState {
+  const state = fixture();
+  state.players = ["a", "b", "c", "d", "e", "f"].slice(0, count).map((id) => ({
+    id, hand: [card(`${id}-keep`, "blue-1")], eliminated: false,
+  }));
+  state.players[0]!.hand.unshift(card("action", faceId));
+  state.drawPile = Array.from({ length: 24 }, (_, i) => card(`penalty-${i}`, "green-2"));
+  return state;
+}
+
+describe("action cards", () => {
+  // Catches missing effects, incorrect turn counts, and counting eliminated seats as active.
+  test.each([
+    ["red-skip", 3, "c", 1], ["red-reverse", 3, "c", -1],
+    ["red-reverse", 2, "a", -1], ["red-skip-everyone", 6, "a", 1],
+  ] as const)("resolves %s with %i players", (faceId, count, currentPlayerId, direction) => {
+    const state = actionFixture(faceId, count);
+    const before = structuredClone(state);
+    const result = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" });
+    expect(result.ok).toBe(true);
+    expect(result.state).toMatchObject({ currentPlayerId, direction, phase: "playing", pendingChoice: null, revision: 1 });
+    expect(state).toEqual(before);
+    if (result.ok) expect(result.events.at(-1)).toEqual({ type: "turn-changed", playerId: currentPlayerId });
+  });
+
+  test.each([
+    ["red-3", 1, "c"], ["red-skip", 1, "f"], ["red-reverse", -1, "f"],
+  ] as const)("traverses six seats after %s", (faceId, direction, expected) => {
+    const state = actionFixture(faceId, 6);
+    state.players.forEach((player) => { player.eliminated = ["b", "d", "e"].includes(player.id); });
+    const result = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" });
+    expect(result.state.currentPlayerId).toBe(expected);
+    expect(result.state.direction).toBe(direction);
+  });
+
+  test("uses the two-active-player Reverse rule even with eliminated seats", () => {
+    const state = actionFixture("red-reverse", 6);
+    state.players.forEach((player) => { player.eliminated = !["a", "e"].includes(player.id); });
+    expect(applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" }).state.currentPlayerId).toBe("a");
+  });
+
+  test.each([["red-draw-2", 2], ["red-draw-4", 4]] as const)("starts %s with penalty %i", (faceId, amount) => {
+    const result = applyGameCommand(actionFixture(faceId), { type: "play-card", playerId: "a", cardId: "action" });
+    expect(result.ok).toBe(true);
+    expect(result.state).toMatchObject({ currentPlayerId: "b", phase: "playing", drawStack: { amount, minimumDrawValue: amount } });
+  });
+
+  // Catches moving the turn before the actor's mandatory color choice or reversing too late.
+  test.each([
+    ["wild-draw-6", 3, 6, 1, "b"], ["wild-draw-10", 3, 10, 1, "b"],
+    ["wild-reverse-draw-4", 3, 4, -1, "c"], ["wild-reverse-draw-4", 2, 4, -1, "a"],
+  ] as const)("resolves color for %s with %i players", (faceId, count, amount, direction, nextPlayer) => {
+    const played = applyGameCommand(actionFixture(faceId, count), { type: "play-card", playerId: "a", cardId: "action" });
+    expect(played.ok).toBe(true);
+    expect(played.state).toMatchObject({ currentPlayerId: "a", direction, phase: "awaiting-choice", pendingChoice: { type: "choose-color", playerId: "a" } });
+    expect(getPlayableCardIds(played.state, "a")).toEqual([]);
+    const chosen = applyGameCommand(played.state, { type: "choose-color", playerId: "a", color: "yellow" });
+    expect(chosen.ok).toBe(true);
+    expect(chosen.state).toMatchObject({ currentPlayerId: nextPlayer, direction, activeColor: "yellow", phase: "playing", pendingChoice: null, drawStack: { amount, minimumDrawValue: amount }, revision: 2 });
+  });
+
+  test("allows a two-player Wild Reverse Draw 4 user to stack onto their own penalty", () => {
+    const state = actionFixture("wild-reverse-draw-4", 2);
+    state.players[0]!.hand.push(card("stack", "green-draw-4"));
+    const played = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" });
+    const chosen = applyGameCommand(played.state, { type: "choose-color", playerId: "a", color: "red" });
+    const stacked = applyGameCommand(chosen.state, { type: "play-card", playerId: "a", cardId: "stack" });
+    expect(stacked.ok).toBe(true);
+    expect(stacked.state).toMatchObject({ currentPlayerId: "b", drawStack: { amount: 8, minimumDrawValue: 4 } });
+  });
+
+  test("prompts the next eligible player for roulette color", () => {
+    const state = actionFixture("wild-color-roulette", 6);
+    state.players[1]!.eliminated = true;
+    const played = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" });
+    expect(played.ok).toBe(true);
+    expect(played.state).toMatchObject({ currentPlayerId: "c", phase: "awaiting-choice", pendingChoice: { type: "choose-roulette-color", playerId: "c" }, drawStack: null });
+    expect(played.state.drawPile).toEqual(state.drawPile);
+  });
+
+  test("rejects unrelated commands and the wrong owner while a color is pending", () => {
+    const played = applyGameCommand(actionFixture("wild-draw-6"), { type: "play-card", playerId: "a", cardId: "action" }).state;
+    const before = structuredClone(played);
+    expect(applyGameCommand(played, { type: "play-card", playerId: "a", cardId: "a-keep" })).toMatchObject({ ok: false, code: "invalid-phase" });
+    expect(applyGameCommand(played, { type: "accept-draw", playerId: "a" })).toMatchObject({ ok: false, code: "invalid-phase" });
+    expect(applyGameCommand(played, { type: "choose-color", playerId: "b", color: "blue" })).toMatchObject({ ok: false, code: "out-of-turn" });
+    expect(played).toEqual(before);
+  });
+
+  test("rejects color choices without a pending color choice", () => {
+    const state = fixture();
+    expect(applyGameCommand(state, { type: "choose-color", playerId: "a", color: "blue" })).toEqual({ ok: false, code: "invalid-phase", state });
+  });
+});
+
+describe("draw stacking", () => {
+  function stackFixture(): GameState {
+    const state = actionFixture("red-draw-4");
+    state.drawStack = { amount: 10, minimumDrawValue: 4 };
+    state.players[0]!.hand = [card("low", "red-draw-2"), card("equal", "blue-draw-4"), card("high", "wild-draw-6"), card("ordinary", "red-3"), card("roulette", "wild-color-roulette")];
+    return state;
+  }
+
+  // Catches using accumulated total, color restrictions, or admitting unrelated wild/number cards.
+  test("offers only equal-or-higher printed draw values regardless of color", () => {
+    expect(getPlayableCardIds(stackFixture(), "a")).toEqual(["equal", "high"]);
+  });
+
+  test.each(["low", "ordinary", "roulette"])("rejects %s during a draw stack without mutation", (cardId) => {
+    const state = stackFixture();
+    const before = structuredClone(state);
+    expect(applyGameCommand(state, { type: "play-card", playerId: "a", cardId })).toEqual({ ok: false, code: "illegal-play", state });
+    expect(state).toEqual(before);
+  });
+
+  test("accumulates penalties using the latest printed value as the next threshold", () => {
+    const state = stackFixture();
+    state.players[1]!.hand.push(card("next-stack", "yellow-draw-4"));
+    const first = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "equal" });
+    expect(first.ok).toBe(true);
+    expect(first.state).toMatchObject({ currentPlayerId: "b", activeColor: "blue", drawStack: { amount: 14, minimumDrawValue: 4 } });
+    const second = applyGameCommand(first.state, { type: "play-card", playerId: "b", cardId: "next-stack" });
+    expect(second.ok).toBe(true);
+    expect(second.state).toMatchObject({ currentPlayerId: "c", activeColor: "yellow", drawStack: { amount: 18, minimumDrawValue: 4 } });
+  });
+
+  test("extends a stack with a higher wild value and waits for its color", () => {
+    const played = applyGameCommand(stackFixture(), { type: "play-card", playerId: "a", cardId: "high" });
+    expect(played.ok).toBe(true);
+    expect(played.state.drawStack).toEqual({ amount: 16, minimumDrawValue: 6 });
+    expect(played.state.pendingChoice).toEqual({ type: "choose-color", playerId: "a" });
+    const chosen = applyGameCommand(played.state, { type: "choose-color", playerId: "a", color: "green" });
+    expect(chosen.ok).toBe(true);
+    expect(chosen.state).toMatchObject({ currentPlayerId: "b", drawStack: { amount: 16, minimumDrawValue: 6 } });
+  });
+
+  test("accepts the accumulated penalty even when a stack card is held and skips that turn", () => {
+    const state = stackFixture();
+    const before = structuredClone(state);
+    const result = applyGameCommand(state, { type: "accept-draw", playerId: "a" });
+    expect(result.ok).toBe(true);
+    expect(result.state.players[0]!.hand.slice(5).map(({ instanceId }) => instanceId)).toEqual(["penalty-0", "penalty-1", "penalty-2", "penalty-3", "penalty-4", "penalty-5", "penalty-6", "penalty-7", "penalty-8", "penalty-9"]);
+    expect(result.state).toMatchObject({ currentPlayerId: "b", drawStack: null, phase: "playing", revision: 1 });
+    expect(result.state.drawPile).toHaveLength(14);
+    expect(state).toEqual(before);
+    if (result.ok) expect(result.events.map(({ type }) => type)).toEqual(["cards-drawn", "turn-changed"]);
+  });
+
+  test("recycles older discards while accepting a penalty and preserves the visible card", () => {
+    const state = stackFixture();
+    state.drawStack = { amount: 2, minimumDrawValue: 2 };
+    state.drawPile = [card("first", "green-1")];
+    state.discardPile = [card("recycled", "blue-2"), card("top", "red-draw-2")];
+    const result = applyGameCommand(state, { type: "accept-draw", playerId: "a" });
+    expect(result.ok).toBe(true);
+    expect(result.state.players[0]!.hand.slice(5)).toEqual([card("first", "green-1"), card("recycled", "blue-2")]);
+    expect(result.state.discardPile).toEqual([card("top", "red-draw-2")]);
+  });
+
+  test("rejects an impossible penalty atomically without losing cards", () => {
+    const state = stackFixture();
+    state.drawPile = [card("only", "green-1")];
+    const before = structuredClone(state);
+    expect(applyGameCommand(state, { type: "accept-draw", playerId: "a" })).toEqual({ ok: false, code: "deck-exhausted", state });
+    expect(state).toEqual(before);
+  });
+
+  test("rejects ordinary drawing during a stack", () => {
+    const state = stackFixture();
+    expect(applyGameCommand(state, { type: "draw-until-playable", playerId: "a" })).toMatchObject({ ok: false, code: "invalid-phase" });
+  });
+
+  test("rejects taking a nonexistent penalty or acting out of turn", () => {
+    expect(applyGameCommand(fixture(), { type: "accept-draw", playerId: "a" })).toMatchObject({ ok: false, code: "invalid-phase" });
+    expect(applyGameCommand(stackFixture(), { type: "accept-draw", playerId: "b" })).toMatchObject({ ok: false, code: "out-of-turn" });
   });
 });
 
