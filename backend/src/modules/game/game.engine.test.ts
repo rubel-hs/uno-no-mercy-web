@@ -26,6 +26,12 @@ function fixture(overrides: Partial<GameState> = {}): GameState {
   };
 }
 
+function drawFixture(overrides: Partial<GameState> = {}): GameState {
+  const state = fixture(overrides);
+  state.players[0]!.hand = [card("bad", "green-2")];
+  return state;
+}
+
 describe("game setup", () => {
   // Catches dealing the wrong count, wrong order, or consuming the wrong deck end.
   test.each([2, 3, 4, 5, 6])("deals seven cards to %i players", (count) => {
@@ -108,11 +114,11 @@ describe("normal turns", () => {
 
   // Catches drawing a fixed single card, drawing past the playable card, or retaining it in hand.
   test("draws until the first playable card and immediately plays it", () => {
-    const state = fixture({ drawPile: [card("d1", "green-1"), card("d2", "yellow-2"), card("d3", "blue-5"), card("d4", "red-9")] });
+    const state = drawFixture({ drawPile: [card("d1", "green-1"), card("d2", "yellow-2"), card("d3", "blue-5"), card("d4", "red-9")] });
     const before = structuredClone(state);
     const result = applyGameCommand(state, { type: "draw-until-playable", playerId: "a" });
     expect(result.ok).toBe(true);
-    expect(result.state.players[0]!.hand.map(({ instanceId }) => instanceId)).toEqual(["red", "number", "bad", "d1", "d2"]);
+    expect(result.state.players[0]!.hand.map(({ instanceId }) => instanceId)).toEqual(["bad", "d1", "d2"]);
     expect(result.state.discardPile.at(-1)).toEqual(card("d3", "blue-5"));
     expect(result.state.drawPile).toEqual([card("d4", "red-9")]);
     expect(result.state.currentPlayerId).toBe("b");
@@ -120,14 +126,31 @@ describe("normal turns", () => {
     expect(state).toEqual(before);
   });
 
+  // Catches bypassing a mandatory held play through any legal match category.
+  test.each([
+    ["color", "red-3", "red-5"],
+    ["number", "blue-5", "red-5"],
+    ["symbol", "blue-skip", "red-skip"],
+    ["wild", "wild-draw-6", "red-5"],
+  ])("rejects drawing with a playable %s match in hand", (_match, faceId, topFaceId) => {
+    const state = fixture({ discardPile: [card("top", topFaceId)] });
+    state.players[0]!.hand = [card("held", faceId), card("bad", "green-2")];
+    const before = structuredClone(state);
+    const result = applyGameCommand(state, { type: "draw-until-playable", playerId: "a" });
+    expect(result).toMatchObject({ ok: false, code: "playable-card-in-hand" });
+    expect(result.state).toBe(state);
+    expect(state).toEqual(before);
+    expect(state.revision).toBe(0);
+  });
+
   // Catches skipping a playable action or wild while searching for a number.
   test.each(["red-skip", "wild-draw-6"])("immediately plays drawn %s and leaves its effect pending", (faceId) => {
-    const state = fixture({ drawPile: [card("action", faceId), card("later", "red-9")] });
+    const state = drawFixture({ drawPile: [card("action", faceId), card("later", "red-9")] });
     const result = applyGameCommand(state, { type: "draw-until-playable", playerId: "a" });
     expect(result.ok).toBe(true);
     expect(result.state.discardPile.at(-1)).toEqual(card("action", faceId));
     expect(result.state.drawPile).toEqual([card("later", "red-9")]);
-    expect(result.state.players[0]!.hand).toHaveLength(3);
+    expect(result.state.players[0]!.hand).toHaveLength(1);
     expect(result.state.phase).toBe("pending-effect");
     expect(result.state.pendingChoice).toEqual({ type: "resolve-action", playerId: "a", cardId: "action" });
     expect(result.state.currentPlayerId).toBe("a");
@@ -144,7 +167,7 @@ describe("normal turns", () => {
 describe("draw pile boundaries", () => {
   // Catches recycling the visible card or losing old discards during rebuild.
   test("rebuilds the draw pile while preserving the visible discard", () => {
-    const state = fixture({ drawPile: [], discardPile: [card("recycle", "blue-5"), card("top", "red-5")] });
+    const state = drawFixture({ drawPile: [], discardPile: [card("recycle", "blue-5"), card("top", "red-5")] });
     const before = structuredClone(state);
     const result = applyGameCommand(state, { type: "draw-until-playable", playerId: "a" });
     expect(result.ok).toBe(true);
@@ -155,16 +178,16 @@ describe("draw pile boundaries", () => {
 
   // Catches duplicating the sole visible discard into a player's hand.
   test("does not duplicate the sole visible discard", () => {
-    const state = fixture({ drawPile: [] });
+    const state = drawFixture({ drawPile: [] });
     const result = applyGameCommand(state, { type: "draw-until-playable", playerId: "a" });
     expect(result).toEqual({ ok: false, code: "deck-exhausted", state });
     expect(result.state.discardPile).toEqual([card("top", "red-5")]);
-    expect(result.state.players[0]!.hand).toHaveLength(3);
+    expect(result.state.players[0]!.hand).toHaveLength(1);
   });
 
   // Catches partial draws leaking into rejected state when all available cards fail to match.
   test("returns deck-exhausted without mutating state when no card can be recycled", () => {
-    const state = fixture({ drawPile: [card("unplayable", "green-1")] });
+    const state = drawFixture({ drawPile: [card("unplayable", "green-1")] });
     const before = structuredClone(state);
     const result = applyGameCommand(state, { type: "draw-until-playable", playerId: "a" });
     expect(result).toEqual({ ok: false, code: "deck-exhausted", state });

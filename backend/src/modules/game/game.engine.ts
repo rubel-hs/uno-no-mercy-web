@@ -94,6 +94,9 @@ export function applyGameCommand(state: GameState, command: GameCommand): GameTr
   }
   const player = state.players.find((player) => player.id === command.playerId && !player.eliminated);
   if (command.playerId !== state.currentPlayerId || !player) return { ok: false, code: "out-of-turn", state };
+  if (command.type === "draw-until-playable" && player.hand.some((card) => isPlayable(state, card))) {
+    return { ok: false, code: "playable-card-in-hand", state };
+  }
   let selected: PhysicalCard | undefined;
   if (command.type === "play-card") {
     selected = player.hand.find((card) => card.instanceId === command.cardId);

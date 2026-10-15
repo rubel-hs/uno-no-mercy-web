@@ -85,6 +85,7 @@ export type GameErrorCode =
   | "out-of-turn"
   | "card-not-in-hand"
   | "illegal-play"
+  | "playable-card-in-hand"
   | "deck-exhausted"
   | "invalid-phase"
   | "unsupported-command";
