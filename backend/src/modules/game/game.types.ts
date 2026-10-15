@@ -25,3 +25,75 @@ export interface PhysicalCard {
   instanceId: string;
   faceId: string;
 }
+
+export interface CreateGameInput {
+  playerIds: string[];
+  /** Ordered from the next card dealt/drawn to the last. */
+  deck: PhysicalCard[];
+  dealerIndex: number;
+}
+
+export interface GamePlayer {
+  id: string;
+  hand: PhysicalCard[];
+  eliminated: boolean;
+}
+
+export type PendingChoice =
+  | { type: "resolve-action"; playerId: string; cardId: string }
+  | { type: "choose-color"; playerId: string }
+  | { type: "choose-swap-target"; playerId: string }
+  | { type: "choose-roulette-color"; playerId: string };
+
+export interface DrawStack {
+  amount: number;
+  minimumDrawValue: number;
+}
+
+export interface UnoWindow {
+  playerId: string;
+  declared: boolean;
+}
+
+export interface GameState {
+  players: GamePlayer[];
+  drawPile: PhysicalCard[];
+  /** Oldest discard first; the final card is visible. */
+  discardPile: PhysicalCard[];
+  direction: 1 | -1;
+  currentPlayerId: string;
+  activeColor: CardColor;
+  phase: "playing" | "pending-effect" | "awaiting-choice" | "finished";
+  pendingChoice: PendingChoice | null;
+  drawStack: DrawStack | null;
+  unoWindow: UnoWindow | null;
+  winner: string | null;
+  revision: number;
+}
+
+export type GameCommand =
+  | { type: "play-card"; playerId: string; cardId: string }
+  | { type: "draw-until-playable"; playerId: string }
+  | { type: "accept-draw"; playerId: string }
+  | { type: "choose-color"; playerId: string; color: CardColor }
+  | { type: "choose-swap-target"; playerId: string; targetPlayerId: string }
+  | { type: "choose-roulette-color"; playerId: string; color: CardColor }
+  | { type: "declare-uno"; playerId: string }
+  | { type: "catch-uno"; playerId: string; targetPlayerId: string };
+
+export type GameErrorCode =
+  | "out-of-turn"
+  | "card-not-in-hand"
+  | "illegal-play"
+  | "deck-exhausted"
+  | "invalid-phase"
+  | "unsupported-command";
+
+export type GameEvent =
+  | { type: "card-played"; playerId: string; cardId: string }
+  | { type: "cards-drawn"; playerId: string; cardIds: string[] }
+  | { type: "turn-changed"; playerId: string };
+
+export type GameTransition =
+  | { ok: false; code: GameErrorCode; state: GameState }
+  | { ok: true; state: GameState; events: GameEvent[] };
