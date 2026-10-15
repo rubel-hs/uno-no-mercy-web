@@ -1,12 +1,17 @@
 import { createApp } from "./app";
-import { loadConfig } from "./config/env";
+import { type AppConfig, loadConfig } from "./config/env";
+import { websocket } from "./modules/realtime/realtime.route";
 
-const config = loadConfig();
-const app = createApp(config);
+export function startServer(config: AppConfig = loadConfig()) {
+  const app = createApp(config);
+  return Bun.serve({
+    port: config.port,
+    fetch: app.fetch,
+    websocket,
+  });
+}
 
-Bun.serve({
-  port: config.port,
-  fetch: app.fetch,
-});
-
-console.log(`UNO No Mercy API listening on http://localhost:${config.port}`);
+if (import.meta.main) {
+  const server = startServer();
+  console.log(`UNO No Mercy API listening on http://localhost:${server.port}`);
+}

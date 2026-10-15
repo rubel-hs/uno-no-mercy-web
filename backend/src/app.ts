@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { type AppConfig, loadConfig } from "./config/env";
 import { createCorsMiddleware } from "./middleware/cors";
 import { healthRoutes } from "./modules/health/health.route";
+import { realtimeRoutes } from "./modules/realtime/realtime.route";
 import { createRoomRoutes } from "./modules/rooms/room.route";
 import { createRoomStore } from "./modules/rooms/room.store";
 import type { RoomStore } from "./modules/rooms/room.types";
@@ -11,6 +12,9 @@ export function createApp(config: AppConfig = loadConfig(), services: { roomStor
   const app = new Hono();
   const roomStore = services.roomStore ?? createRoomStore();
 
+  // Socket upgrades enforce their own origin policy and must finish before
+  // CORS middleware attempts to modify the upgrade response's headers.
+  app.route("/api/rooms", realtimeRoutes(roomStore, config.corsOrigins));
   app.use("/api/*", createCorsMiddleware(config.corsOrigins));
   app.get("/", (context) =>
     context.json({
