@@ -2,9 +2,15 @@ import { motion } from "motion/react";
 
 type HomeScreenProps = {
   onOpenDevMode: () => void;
+  onCreateRoom?: () => void;
+  onJoinRoom?: () => void;
 };
 
-export function HomeScreen({ onOpenDevMode }: HomeScreenProps) {
+export function HomeScreen({
+  onOpenDevMode,
+  onCreateRoom,
+  onJoinRoom,
+}: HomeScreenProps) {
   return (
     <main className="home-screen">
       <div className="home-screen__grid" aria-hidden="true" />
@@ -33,24 +39,34 @@ export function HomeScreen({ onOpenDevMode }: HomeScreenProps) {
         </div>
 
         <div className="home-actions">
-          <button aria-label="Create game room" className="home-action home-action--create" type="button">
+          <button
+            aria-label="Create game room"
+            className="home-action home-action--create"
+            onClick={onCreateRoom}
+            type="button"
+          >
             <span className="home-action__number">01</span>
             <span className="home-action__icon" aria-hidden="true">＋</span>
             <span className="home-action__content">
               <small>Host a new table</small>
               <strong>Create game room</strong>
-              <em>Room setup coming next</em>
+              <em>Set up private room</em>
             </span>
             <span className="home-action__arrow" aria-hidden="true">↗</span>
           </button>
 
-          <button aria-label="Join game room" className="home-action home-action--join" type="button">
+          <button
+            aria-label="Join game room"
+            className="home-action home-action--join"
+            onClick={onJoinRoom}
+            type="button"
+          >
             <span className="home-action__number">02</span>
             <span className="home-action__icon" aria-hidden="true">→</span>
             <span className="home-action__content">
               <small>Enter a room code</small>
               <strong>Join game room</strong>
-              <em>Multiplayer coming next</em>
+              <em>Join existing room</em>
             </span>
             <span className="home-action__arrow" aria-hidden="true">↗</span>
           </button>
