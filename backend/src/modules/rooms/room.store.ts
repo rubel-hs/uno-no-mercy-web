@@ -205,11 +205,18 @@ export function createRoomStore(overrides: Partial<RoomStoreDeps> = {}): RoomSto
     else if (room.hostPlayerId === seat.id) room.hostPlayerId = room.seats.keys().next().value ?? "";
   }
 
-  function expire(room: Room, seat: Seat): void {
-    if (rooms.get(room.code) !== room || room.seats.get(seat.id) !== seat || seat.peer ||
-      seat.reconnectDeadline === null || deps.now() < seat.reconnectDeadline) return;
-    removeSeat(room, seat);
-    commit(room, { version: 1, type: "lifecycle", event: "player-eliminated", playerId: seat.id });
+  function expireDueSeats(room: Room): void {
+    if (rooms.get(room.code) !== room) return;
+    const now = deps.now();
+    const due = [...room.seats.values()]
+      .filter((seat) => !seat.peer && seat.reconnectDeadline !== null && seat.reconnectDeadline <= now)
+      // Stable sort preserves seat order as the tie-break for equal deadlines.
+      .sort((first, second) => first.reconnectDeadline! - second.reconnectDeadline!);
+    for (const seat of due) {
+      removeSeat(room, seat);
+      commit(room, { version: 1, type: "lifecycle", event: "player-eliminated", playerId: seat.id });
+    }
+    // Finish the ordered batch before invoking reentrant transport callbacks.
     flush();
   }
 
@@ -218,7 +225,7 @@ export function createRoomStore(overrides: Partial<RoomStoreDeps> = {}): RoomSto
     if (!room) return undefined;
     // Timer callbacks may be delayed by a busy event loop. Enforce the actual
     // deadlines before accepting another membership or gameplay mutation.
-    for (const seat of [...room.seats.values()]) expire(room, seat);
+    expireDueSeats(room);
     return rooms.get(room.code) === room ? room : undefined;
   }
 
@@ -229,7 +236,7 @@ export function createRoomStore(overrides: Partial<RoomStoreDeps> = {}): RoomSto
       if (seat.timerVersion !== version || seat.reconnectDeadline === null || rooms.get(room.code) !== room) return;
       const remaining = seat.reconnectDeadline - deps.now();
       if (remaining > 0) seat.timer = deps.setTimeout(callback, remaining);
-      else expire(room, seat);
+      else expireDueSeats(room);
     };
     seat.timer = deps.setTimeout(callback, GRACE_MS);
   }
@@ -304,7 +311,7 @@ export function createRoomStore(overrides: Partial<RoomStoreDeps> = {}): RoomSto
       const seat = typeof token === "string" ? [...room.seats.values()].find((seat) => seat.token === token) : undefined;
       if (!seat) return failure("INVALID_TOKEN");
       if (seat.reconnectDeadline !== null && deps.now() >= seat.reconnectDeadline) {
-        expire(room, seat);
+        expireDueSeats(room);
         return failure("INVALID_TOKEN");
       }
       const old = seat.peer;

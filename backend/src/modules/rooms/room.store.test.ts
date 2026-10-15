@@ -132,6 +132,44 @@ function game(hands = defaultHands.slice(0, 3)) {
   return { ...result, state, play };
 }
 
+function expiryWinner(delivery: "timely" | "delayed-settlement" | "delayed-timer", gap: number) {
+  const hands = defaultHands.slice(0, 3).map((hand) => [...hand]);
+  hands[0]![0] = "wild-draw-10";
+  hands[1]![0] = "wild-draw-10";
+  const room = game(hands);
+  value(room.play(0, "wild-draw-10"));
+  value(room.command(0, { type: "choose-color", color: "red" }));
+  value(room.play(1, "wild-draw-10"));
+  value(room.command(1, { type: "choose-color", color: "blue" }));
+  value(room.command(2, { type: "accept-draw" }));
+  // Carol remains connected after a real +20 penalty Mercy-eliminates her.
+  expect(room.state().players.map(({ eliminated }) => eliminated)).toEqual([false, false, true]);
+  expect(room.state().phase).toBe("playing");
+  room.store.disconnect(room.roomCode, room.seats[1]!.playerId, room.peers[1]!.id);
+  room.clock.advance(gap);
+  room.store.disconnect(room.roomCode, room.seats[0]!.playerId, room.peers[0]!.id);
+  const callbacks = [...room.clock.timers.values()].map(({ callback }) => callback);
+  if (delivery === "timely") room.clock.advance(50_000);
+  else {
+    room.clock.time += 50_000;
+    // Deliver Alice's later-created callback first to exercise timer-side ordering.
+    if (delivery === "delayed-timer") callbacks[1]!();
+  }
+  const replacement = peer("carol-reconnected");
+  value(room.store.connect(room.roomCode, room.seats[2]!.token, replacement));
+  const result = room.state();
+  // Drained callbacks must stay inert after another path has removed their seats.
+  for (const callback of callbacks) callback();
+  expect(room.state()).toEqual(result);
+  expect(room.clock.timers.size).toBe(0);
+  return {
+    winner: result.players.find(({ id }) => id === result.winner)!.name,
+    revision: result.revision,
+    eliminated: result.players.map(({ eliminated }) => eliminated),
+    retainedNames: room.store.getRoom(room.roomCode)!.players.map(({ name }) => name),
+  };
+}
+
 describe("room creation and lobby", () => {
   // Break caught: collisions overwrite rooms/seats or private credentials are reused.
   test("retries room code and token collisions without overwriting existing rooms", () => {
@@ -364,6 +402,28 @@ describe("disconnect, reconnect and cleanup", () => {
     expect(room.store.connect(room.roomCode, room.seats[0]!.token, peer("too-late"))).toMatchObject({ ok: false, code: "INVALID_TOKEN" });
     expect(room.state().players[0]!.eliminated).toBe(true);
     expect(room.clock.timers.size).toBe(0);
+  });
+
+  // Break caught: delayed settlement awards the winner by seat order instead of expiry time.
+  test("timely callbacks and delayed settlement preserve the same last-player winner", () => {
+    const timely = expiryWinner("timely", 1_000);
+    expect(timely).toMatchObject({ winner: "Alice", eliminated: [true, true, true], retainedNames: ["Carol"] });
+    expect(expiryWinner("delayed-settlement", 1_000)).toEqual(timely);
+  });
+
+  // Break caught: a later-deadline callback expires its seat before an earlier overdue seat.
+  test("a delayed timer delivered out of order agrees with timely last-player detection", () => {
+    const timely = expiryWinner("timely", 1_000);
+    expect(timely.winner).toBe("Alice");
+    expect(expiryWinner("delayed-timer", 1_000)).toEqual(timely);
+  });
+
+  // Break caught: equal deadlines are resolved by callback delivery order rather than seat order.
+  test("equal deadlines use seat order consistently across callback and settlement delivery", () => {
+    const timely = expiryWinner("timely", 0);
+    expect(timely.winner).toBe("Bob");
+    expect(expiryWinner("delayed-settlement", 0)).toEqual(timely);
+    expect(expiryWinner("delayed-timer", 0)).toEqual(timely);
   });
 
   // Break caught: a delayed timer lets the next command select a seat past its deadline.
