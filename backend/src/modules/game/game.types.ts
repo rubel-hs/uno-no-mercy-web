@@ -35,6 +35,10 @@ export interface CreateGameInput {
 
 export interface GamePlayer {
   id: string;
+  /** Room-owned presentation metadata; engine-only callers may omit it. */
+  name?: string;
+  /** Connection state is supplied by the room, never used for turn eligibility. */
+  online?: boolean;
   hand: PhysicalCard[];
   eliminated: boolean;
 }
