@@ -4,6 +4,9 @@ import type { GameState, PhysicalCard } from "./game.types";
 
 const card = (instanceId: string, faceId: string): PhysicalCard => ({ instanceId, faceId });
 
+// Task 4 fixtures name physical cards so effects can be checked independently.
+const handOf = (state: GameState, id: string) => state.players.find((player) => player.id === id)!.hand.map((card) => card.instanceId);
+
 function fixture(overrides: Partial<GameState> = {}): GameState {
   return {
     players: [
@@ -22,6 +25,7 @@ function fixture(overrides: Partial<GameState> = {}): GameState {
     unoWindow: null,
     winner: null,
     revision: 0,
+    gameplaySequence: 0,
     ...overrides,
   };
 }
@@ -173,6 +177,221 @@ function actionFixture(faceId: string, count = 3): GameState {
   state.drawPile = Array.from({ length: 24 }, (_, i) => card(`penalty-${i}`, "green-2"));
   return state;
 }
+
+describe("hand effects and immediate wins", () => {
+  // Break caught: 7 advancing before target choice, accepting self/eliminated targets, or partial swap.
+  test("requires an active other target for 7 then swaps complete hands", () => {
+    const state = actionFixture("red-7", 4);
+    state.players[2]!.eliminated = true;
+    state.players[1]!.hand.push(card("b-extra", "yellow-2"));
+    const played = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" });
+    expect(played.state.pendingChoice).toEqual({ type: "choose-swap-target", playerId: "a" });
+    for (const targetPlayerId of ["a", "c", "absent"]) {
+      const rejected = applyGameCommand(played.state, { type: "choose-swap-target", playerId: "a", targetPlayerId });
+      expect(rejected.ok).toBe(false);
+      expect(rejected.state).toBe(played.state);
+    }
+    expect(applyGameCommand(played.state, { type: "choose-swap-target", playerId: "b", targetPlayerId: "d" }).ok).toBe(false);
+    const swapped = applyGameCommand(played.state, { type: "choose-swap-target", playerId: "a", targetPlayerId: "b" });
+    expect(swapped.ok).toBe(true);
+    expect(handOf(swapped.state, "a")).toEqual(["b-keep", "b-extra"]);
+    expect(handOf(swapped.state, "b")).toEqual(["a-keep"]);
+    expect(swapped.state).toMatchObject({ currentPlayerId: "b", pendingChoice: null, phase: "playing", revision: 2 });
+  });
+
+  test.each([[1, ["f-keep", "a-keep", "c-keep"]], [-1, ["c-keep", "f-keep", "a-keep"]]] as const)("0 passes active hands in direction %i through six seats", (direction, expected) => {
+    const state = actionFixture("red-0", 6);
+    state.direction = direction;
+    state.players.forEach((player) => { if (["b", "d", "e"].includes(player.id)) { player.eliminated = true; player.hand = []; } });
+    const played = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" });
+    expect([handOf(played.state, "a")[0], handOf(played.state, "c")[0], handOf(played.state, "f")[0]]).toEqual([...expected]);
+    expect(played.state.currentPlayerId).toBe(direction === 1 ? "c" : "f");
+  });
+
+  // Break caught: extra discards covering the action or discarding unrelated colors.
+  test("Discard All places every matching card beneath the visible action", () => {
+    const state = actionFixture("red-discard-all");
+    state.players[0]!.hand.push(card("red-number", "red-2"), card("red-action", "red-draw-4"));
+    const played = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" });
+    expect(handOf(played.state, "a")).toEqual(["a-keep"]);
+    expect(played.state.discardPile.map(({ instanceId }) => instanceId)).toEqual(["top", "red-number", "red-action", "action"]);
+    expect(played.state).toMatchObject({ phase: "playing", currentPlayerId: "b", pendingChoice: null });
+  });
+
+  // Break caught: final effects (direction/penalty/pass/swap/roulette) running after victory.
+  test.each(["red-3", "red-7", "red-0", "red-reverse", "red-draw-4", "wild-reverse-draw-4", "wild-draw-10", "wild-color-roulette", "red-discard-all"])("playing final %s wins before residual effects", (faceId) => {
+    const state = actionFixture(faceId);
+    state.players[0]!.hand = [card("action", faceId)];
+    const before = structuredClone(state);
+    const played = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" });
+    expect(played.ok).toBe(true);
+    expect(played.state).toMatchObject({ phase: "finished", winner: "a", pendingChoice: null, drawStack: null, unoWindow: null, direction: 1, revision: 1 });
+    expect(handOf(played.state, "b")).toEqual(["b-keep"]);
+    expect(state).toEqual(before);
+    expect(applyGameCommand(played.state, { type: "declare-uno", playerId: "b" }).ok).toBe(false);
+  });
+
+  test("Discard All wins when its extra discards empty the hand", () => {
+    const state = actionFixture("red-discard-all");
+    state.players[0]!.hand[1] = card("extra", "red-9");
+    const played = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" });
+    expect(played.state).toMatchObject({ phase: "finished", winner: "a" });
+    expect(handOf(played.state, "a")).toEqual([]);
+    expect(played.state.discardPile.map(({ instanceId }) => instanceId)).toEqual(["top", "extra", "action"]);
+  });
+});
+
+describe("roulette and Mercy", () => {
+  // Break caught: wrong owner, wild matching a color, partial reveal retention, or wrong turn/color.
+  test("roulette affected player reveals through wilds to the chosen color then loses their turn", () => {
+    const state = actionFixture("wild-color-roulette");
+    state.drawPile = [card("wild", "wild-draw-6"), card("other", "green-2"), card("match", "yellow-3"), card("later", "blue-4")];
+    const played = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" }).state;
+    expect(applyGameCommand(played, { type: "choose-roulette-color", playerId: "a", color: "yellow" }).ok).toBe(false);
+    const resolved = applyGameCommand(played, { type: "choose-roulette-color", playerId: "b", color: "yellow" });
+    expect(resolved.ok).toBe(true);
+    expect(handOf(resolved.state, "b")).toEqual(["b-keep", "wild", "other", "match"]);
+    expect(resolved.state.drawPile.map(({ instanceId }) => instanceId)).toEqual(["later"]);
+    expect(resolved.state).toMatchObject({ currentPlayerId: "c", activeColor: "yellow", phase: "playing", pendingChoice: null, revision: 2 });
+  });
+
+  test("roulette rejects impossible reveal atomically", () => {
+    const state = actionFixture("wild-color-roulette");
+    state.drawPile = [card("other", "green-2")];
+    const played = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" }).state;
+    const before = structuredClone(played);
+    expect(applyGameCommand(played, { type: "choose-roulette-color", playerId: "b", color: "yellow" })).toEqual({ ok: false, code: "deck-exhausted", state: played });
+    expect(played).toEqual(before);
+  });
+
+  // Break caught: drawing through 25, auto-playing a 25th playable card, or selecting an eliminated seat.
+  test.each(["draw-until-playable", "accept-draw", "roulette"] as const)("Mercy interrupts %s on the 25th card and traverses six seats", (mode) => {
+    const state = actionFixture("red-3", 6);
+    state.players[0]!.hand = Array.from({ length: 24 }, (_, i) => card(`held-${i}`, "green-1"));
+    state.players.forEach((player) => { if (["b", "d", "e"].includes(player.id)) { player.eliminated = true; player.hand = []; } });
+    state.drawPile = [card("twenty-fifth", "red-2"), card("untouched", "yellow-3")];
+    if (mode === "accept-draw") state.drawStack = { amount: 10, minimumDrawValue: 4 };
+    if (mode === "roulette") { state.phase = "awaiting-choice"; state.pendingChoice = { type: "choose-roulette-color", playerId: "a" }; }
+    const result = applyGameCommand(state, mode === "roulette" ? { type: "choose-roulette-color", playerId: "a", color: "yellow" } : { type: mode, playerId: "a" });
+    expect(result.ok).toBe(true);
+    expect(result.state.players[0]).toMatchObject({ eliminated: true, hand: [] });
+    expect(result.state.drawPile.map(({ instanceId }) => instanceId)).toEqual(["untouched"]);
+    expect(result.state).toMatchObject({ phase: "playing", currentPlayerId: "c", drawStack: null, pendingChoice: null });
+    expect(result.state.discardPile).toEqual([card("top", "red-5")]);
+  });
+
+  test.each(["red-0", "red-7"])("Mercy runs after %s transfers a hand", (faceId) => {
+    const state = actionFixture(faceId);
+    state.players[1]!.hand = Array.from({ length: 25 }, (_, i) => card(`large-${i}`, "blue-2"));
+    let result = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" });
+    if (faceId === "red-7") result = applyGameCommand(result.state, { type: "choose-swap-target", playerId: "a", targetPlayerId: "b" });
+    const eliminatedId = faceId === "red-0" ? "c" : "a";
+    expect(result.state.players.find(({ id }) => id === eliminatedId)).toMatchObject({ eliminated: true, hand: [] });
+  });
+
+  test("the last active player wins when a draw eliminates their only opponent", () => {
+    const state = actionFixture("red-3", 2);
+    state.players[0]!.hand = Array.from({ length: 24 }, (_, i) => card(`held-${i}`, "blue-2"));
+    state.drawStack = { amount: 6, minimumDrawValue: 6 };
+    const result = applyGameCommand(state, { type: "accept-draw", playerId: "a" });
+    expect(result.state).toMatchObject({ phase: "finished", winner: "b", pendingChoice: null, drawStack: null, unoWindow: null });
+    expect(handOf(result.state, "a")).toEqual([]);
+  });
+});
+
+describe("serialized UNO race", () => {
+  const opening = (declareUno = false) => applyGameCommand(actionFixture("red-3"), { type: "play-card", playerId: "a", cardId: "action", declareUno }).state;
+
+  // Break caught: ignoring inline declaration or letting a resolved catch penalize twice.
+  test("inline UNO prevents a catch", () => {
+    const state = opening(true);
+    expect(state.unoWindow).toMatchObject({ playerId: "a", declared: true });
+    expect(applyGameCommand(state, { type: "catch-uno", playerId: "b", targetPlayerId: "a" }).ok).toBe(false);
+    expect(handOf(state, "a")).toEqual(["a-keep"]);
+  });
+
+  test("a separate declaration wins the race before a valid next action", () => {
+    const declared = applyGameCommand(opening(), { type: "declare-uno", playerId: "a" });
+    expect(declared.ok).toBe(true);
+    expect(declared.state.revision).toBe(2);
+    expect(applyGameCommand(declared.state, { type: "catch-uno", playerId: "c", targetPlayerId: "a" }).ok).toBe(false);
+  });
+
+  test("a catch first draws exactly two and closes the vulnerability", () => {
+    const state = opening();
+    const before = structuredClone(state);
+    const caught = applyGameCommand(state, { type: "catch-uno", playerId: "c", targetPlayerId: "a" });
+    expect(caught.ok).toBe(true);
+    expect(handOf(caught.state, "a")).toEqual(["a-keep", "penalty-0", "penalty-1"]);
+    expect(caught.state).toMatchObject({ currentPlayerId: "b", revision: 2, unoWindow: null });
+    expect(applyGameCommand(caught.state, { type: "declare-uno", playerId: "a" }).ok).toBe(false);
+    expect(applyGameCommand(caught.state, { type: "catch-uno", playerId: "b", targetPlayerId: "a" }).ok).toBe(false);
+    expect(state).toEqual(before);
+  });
+
+  test("invalid gameplay does not close UNO but the next accepted action does", () => {
+    const state = opening();
+    expect(applyGameCommand(state, { type: "play-card", playerId: "b", cardId: "missing" }).ok).toBe(false);
+    expect(applyGameCommand(state, { type: "declare-uno", playerId: "a" }).ok).toBe(true);
+    state.players[1]!.hand.push(card("b-play", "red-2"));
+    const advanced = applyGameCommand(state, { type: "play-card", playerId: "b", cardId: "b-play" });
+    expect(advanced.ok).toBe(true);
+    expect(applyGameCommand(advanced.state, { type: "catch-uno", playerId: "c", targetPlayerId: "a" }).ok).toBe(false);
+  });
+
+  test("own mandatory choice does not consume the next-player UNO boundary", () => {
+    const played = applyGameCommand(actionFixture("wild-draw-6"), { type: "play-card", playerId: "a", cardId: "action" });
+    const chosen = applyGameCommand(played.state, { type: "choose-color", playerId: "a", color: "red" });
+    expect(applyGameCommand(chosen.state, { type: "declare-uno", playerId: "a" }).ok).toBe(true);
+    expect(applyGameCommand(chosen.state, { type: "catch-uno", playerId: "b", targetPlayerId: "a" }).ok).toBe(true);
+  });
+
+  test("only another active player can catch the vulnerable player", () => {
+    const state = opening();
+    state.players[2]!.eliminated = true;
+    for (const playerId of ["a", "c", "absent"]) expect(applyGameCommand(state, { type: "catch-uno", playerId, targetPlayerId: "a" }).ok).toBe(false);
+    expect(applyGameCommand(state, { type: "declare-uno", playerId: "b" }).ok).toBe(false);
+  });
+
+  test("an impossible UNO penalty rejects atomically and preserves the open race", () => {
+    const state = opening();
+    state.drawPile = [card("only-draw", "green-2")];
+    state.discardPile = [state.discardPile.at(-1)!];
+    const before = structuredClone(state);
+    const caught = applyGameCommand(state, { type: "catch-uno", playerId: "b", targetPlayerId: "a" });
+    expect(caught).toEqual({ ok: false, code: "deck-exhausted", state });
+    expect(state).toEqual(before);
+    expect(applyGameCommand(state, { type: "declare-uno", playerId: "a" }).ok).toBe(true);
+  });
+
+  // Ruling: forced recipients never open a new window; preserve it only for
+  // the actor who reduced their own hand to one and still holds one afterward.
+  test.each(["red-0", "red-7"])("%s keeps UNO tied to its actor through the hand effect", (faceId) => {
+    const state = actionFixture(faceId);
+    const played = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" });
+    const resolved = faceId === "red-7" ? applyGameCommand(played.state, { type: "choose-swap-target", playerId: "a", targetPlayerId: "b" }) : played;
+    expect(resolved.state.unoWindow).toMatchObject({ playerId: "a", declared: false });
+    expect(applyGameCommand(resolved.state, { type: "declare-uno", playerId: "b" }).ok).toBe(false);
+  });
+
+  test.each(["red-0", "red-7"])("%s clears actor UNO after receiving a larger hand", (faceId) => {
+    const state = actionFixture(faceId);
+    state.players[faceId === "red-7" ? 1 : 2]!.hand.push(card("extra", "blue-2"));
+    const played = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" });
+    const resolved = faceId === "red-7" ? applyGameCommand(played.state, { type: "choose-swap-target", playerId: "a", targetPlayerId: "b" }) : played;
+    expect(resolved.state.unoWindow).toBeNull();
+    expect(applyGameCommand(resolved.state, { type: "catch-uno", playerId: "c", targetPlayerId: "a" }).ok).toBe(false);
+  });
+
+  test.each(["red-0", "red-7"])("%s does not open UNO just for receiving a single card", (faceId) => {
+    const state = actionFixture(faceId);
+    state.players[0]!.hand.push(card("extra", "green-2"));
+    const played = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" });
+    const resolved = faceId === "red-7" ? applyGameCommand(played.state, { type: "choose-swap-target", playerId: "a", targetPlayerId: "b" }) : played;
+    expect(handOf(resolved.state, "a")).toHaveLength(1);
+    expect(resolved.state.unoWindow).toBeNull();
+  });
+});
 
 describe("action cards", () => {
   // Catches missing effects, incorrect turn counts, and counting eliminated seats as active.

@@ -53,6 +53,7 @@ export interface DrawStack {
 export interface UnoWindow {
   playerId: string;
   declared: boolean;
+  expiresAtGameplaySequence: number;
 }
 
 export interface GameState {
@@ -69,10 +70,12 @@ export interface GameState {
   unoWindow: UnoWindow | null;
   winner: string | null;
   revision: number;
+  /** Accepted turn-start actions, including the affected player's roulette choice. */
+  gameplaySequence: number;
 }
 
 export type GameCommand =
-  | { type: "play-card"; playerId: string; cardId: string }
+  | { type: "play-card"; playerId: string; cardId: string; declareUno?: boolean }
   | { type: "draw-until-playable"; playerId: string }
   | { type: "accept-draw"; playerId: string }
   | { type: "choose-color"; playerId: string; color: CardColor }
@@ -88,6 +91,8 @@ export type GameErrorCode =
   | "playable-card-in-hand"
   | "deck-exhausted"
   | "invalid-phase"
+  | "invalid-target"
+  | "uno-unavailable"
   | "unsupported-command";
 
 export type GameEvent =

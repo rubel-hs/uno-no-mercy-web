@@ -1,6 +1,7 @@
 import { CARD_FACES, shuffleDeck } from "./deck";
 import type { CardFace, CreateGameInput, GameCommand, GameEvent, GameState, GameTransition, PhysicalCard } from "./game.types";
 import { getNextEligiblePlayerId } from "./turn-order";
+import { applyMercyRule, passHands, swapHands } from "./hand-rules";
 
 const faces = new Map(CARD_FACES.map((face) => [face.faceId, face]));
 
@@ -44,7 +45,7 @@ export function createGameState(input: CreateGameInput): GameState {
     players, drawPile, discardPile, direction: 1,
     currentPlayerId: playerIds[(dealerIndex + 1) % playerIds.length]!,
     activeColor: visible.color as GameState["activeColor"],
-    phase: "playing", pendingChoice: null, drawStack: null, unoWindow: null, winner: null, revision: 0,
+    phase: "playing", pendingChoice: null, drawStack: null, unoWindow: null, winner: null, revision: 0, gameplaySequence: 0,
   };
 }
 
@@ -77,6 +78,37 @@ function activePlayerCount(state: GameState): number {
   return state.players.filter(({ eliminated }) => !eliminated).length;
 }
 
+function finishGame(state: GameState, winner: string): void {
+  state.winner = winner;
+  state.phase = "finished";
+  state.pendingChoice = null;
+  state.drawStack = null;
+  state.unoWindow = null;
+}
+
+function reconcileUnoWindow(state: GameState): void {
+  if (state.unoWindow && !state.players.some(({ id, eliminated, hand }) =>
+    id === state.unoWindow!.playerId && !eliminated && hand.length === 1)) state.unoWindow = null;
+}
+
+function checkMercy(state: GameState): void {
+  state.players = applyMercyRule(state).players;
+  reconcileUnoWindow(state);
+  const active = state.players.filter(({ eliminated }) => !eliminated);
+  if (active.length === 1) finishGame(state, active[0]!.id);
+}
+
+function beginGameplay(state: GameState): void {
+  state.gameplaySequence++;
+  if (state.unoWindow && state.gameplaySequence >= state.unoWindow.expiresAtGameplaySequence) state.unoWindow = null;
+}
+
+function openUnoWindow(state: GameState, playerId: string, declared: boolean): void {
+  if (state.players.find(({ id }) => id === playerId)!.hand.length === 1) {
+    state.unoWindow = { playerId, declared, expiresAtGameplaySequence: state.gameplaySequence + 1 };
+  }
+}
+
 function drawCard(state: GameState): PhysicalCard | null {
   if (state.drawPile.length === 0) {
     if (state.discardPile.length <= 1) return null;
@@ -87,13 +119,29 @@ function drawCard(state: GameState): PhysicalCard | null {
   return state.drawPile.shift()!;
 }
 
-function playCard(state: GameState, playerId: string, card: PhysicalCard, events: GameEvent[]): void {
+function playCard(state: GameState, playerId: string, card: PhysicalCard, events: GameEvent[], declared = false): void {
   const player = state.players.find((player) => player.id === playerId)!;
   player.hand = player.hand.filter(({ instanceId }) => instanceId !== card.instanceId);
-  state.discardPile.push(card);
   const face = faceOf(card);
+  if (face.kind === "discard-all") {
+    state.discardPile.push(...player.hand.filter((held) => faceOf(held).color === face.color));
+    player.hand = player.hand.filter((held) => faceOf(held).color !== face.color);
+  }
+  state.discardPile.push(card);
   if (face.color !== "wild") state.activeColor = face.color;
   events.push({ type: "card-played", playerId, cardId: card.instanceId });
+  if (player.hand.length === 0) { finishGame(state, playerId); return; }
+  openUnoWindow(state, playerId, declared);
+  if (face.kind === "number" && face.value === 7) {
+    state.phase = "awaiting-choice";
+    state.pendingChoice = { type: "choose-swap-target", playerId };
+    return;
+  }
+  if (face.kind === "number" && face.value === 0) {
+    state.players = passHands(state).players;
+    checkMercy(state);
+    if (state.winner) return;
+  }
   if (face.kind === "reverse" || face.kind === "wild-reverse-draw-4") state.direction = state.direction === 1 ? -1 : 1;
   if (face.drawValue) {
     state.drawStack = { amount: (state.drawStack?.amount ?? 0) + face.drawValue, minimumDrawValue: face.drawValue };
@@ -109,11 +157,6 @@ function playCard(state: GameState, playerId: string, card: PhysicalCard, events
     state.pendingChoice = { type: "choose-color", playerId };
     return;
   }
-  if (face.kind === "discard-all") {
-    state.phase = "pending-effect";
-    state.pendingChoice = { type: "resolve-action", playerId, cardId: card.instanceId };
-    return;
-  }
   if (face.kind === "skip-everyone") {
     advanceTurn(state, events, activePlayerCount(state));
   } else {
@@ -122,8 +165,65 @@ function playCard(state: GameState, playerId: string, card: PhysicalCard, events
 }
 
 export function applyGameCommand(state: GameState, command: GameCommand): GameTransition {
-  if (command.type !== "play-card" && command.type !== "draw-until-playable" && command.type !== "accept-draw" && command.type !== "choose-color") {
-    return { ok: false, code: "unsupported-command", state };
+  if (state.phase === "finished") return { ok: false, code: "invalid-phase", state };
+  if (command.type === "declare-uno" || command.type === "catch-uno") {
+    const window = state.unoWindow;
+    const actor = state.players.find(({ id, eliminated }) => id === command.playerId && !eliminated);
+    if (!actor || !window || window.declared || state.gameplaySequence >= window.expiresAtGameplaySequence ||
+      (command.type === "declare-uno" ? window.playerId !== command.playerId : window.playerId !== command.targetPlayerId || window.playerId === command.playerId)) {
+      return { ok: false, code: "uno-unavailable", state };
+    }
+    const next = structuredClone(state);
+    const events: GameEvent[] = [];
+    if (command.type === "declare-uno") {
+      next.unoWindow!.declared = true;
+    } else {
+      const drawnIds: string[] = [];
+      for (let i = 0; i < 2; i++) {
+        const drawn = drawCard(next);
+        if (!drawn) return { ok: false, code: "deck-exhausted", state };
+        next.players.find(({ id }) => id === window.playerId)!.hand.push(drawn);
+        drawnIds.push(drawn.instanceId);
+        checkMercy(next);
+        if (next.players.find(({ id }) => id === window.playerId)!.eliminated) break;
+      }
+      next.unoWindow = null;
+      events.push({ type: "cards-drawn", playerId: window.playerId, cardIds: drawnIds });
+    }
+    next.revision++;
+    return { ok: true, state: next, events };
+  }
+  if (command.type === "choose-swap-target" || command.type === "choose-roulette-color") {
+    if (state.phase !== "awaiting-choice" || state.pendingChoice?.type !== command.type) return { ok: false, code: "invalid-phase", state };
+    if (state.pendingChoice.playerId !== command.playerId || !state.players.some(({ id, eliminated }) => id === command.playerId && !eliminated)) return { ok: false, code: "out-of-turn", state };
+    if (command.type === "choose-swap-target" && (command.targetPlayerId === command.playerId || !state.players.some(({ id, eliminated }) => id === command.targetPlayerId && !eliminated))) return { ok: false, code: "invalid-target", state };
+    const next = structuredClone(state);
+    const events: GameEvent[] = [];
+    next.phase = "playing";
+    next.pendingChoice = null;
+    if (command.type === "choose-swap-target") {
+      next.players = swapHands(next, command.playerId, command.targetPlayerId).players;
+      checkMercy(next);
+    } else {
+      // Choosing roulette is the affected next player's first gameplay action.
+      beginGameplay(next);
+      next.activeColor = command.color;
+      const drawnIds: string[] = [];
+      let drawn: PhysicalCard;
+      do {
+        const card = drawCard(next);
+        if (!card) return { ok: false, code: "deck-exhausted", state };
+        drawn = card;
+        next.players.find(({ id }) => id === command.playerId)!.hand.push(drawn);
+        drawnIds.push(drawn.instanceId);
+        checkMercy(next);
+        if (next.players.find(({ id }) => id === command.playerId)!.eliminated) break;
+      } while (faceOf(drawn).color !== command.color);
+      events.push({ type: "cards-drawn", playerId: command.playerId, cardIds: drawnIds });
+    }
+    if (!next.winner) advanceTurn(next, events);
+    next.revision++;
+    return { ok: true, state: next, events };
   }
   if (command.type === "choose-color") {
     if (state.phase !== "awaiting-choice" || state.pendingChoice?.type !== "choose-color") {
@@ -160,18 +260,20 @@ export function applyGameCommand(state: GameState, command: GameCommand): GameTr
   }
   const next = structuredClone(state);
   const events: GameEvent[] = [];
+  beginGameplay(next);
   if (command.type === "accept-draw") {
     const drawnIds: string[] = [];
-    const hand = next.players.find(({ id }) => id === command.playerId)!.hand;
     for (let i = 0; i < next.drawStack!.amount; i++) {
       const drawn = drawCard(next);
       if (!drawn) return { ok: false, code: "deck-exhausted", state };
-      hand.push(drawn);
+      next.players.find(({ id }) => id === command.playerId)!.hand.push(drawn);
       drawnIds.push(drawn.instanceId);
+      checkMercy(next);
+      if (next.players.find(({ id }) => id === command.playerId)!.eliminated) break;
     }
     next.drawStack = null;
     events.push({ type: "cards-drawn", playerId: command.playerId, cardIds: drawnIds });
-    advanceTurn(next, events);
+    if (!next.winner) advanceTurn(next, events);
     next.revision++;
     return { ok: true, state: next, events };
   }
@@ -183,10 +285,16 @@ export function applyGameCommand(state: GameState, command: GameCommand): GameTr
       selected = drawn;
       next.players.find((player) => player.id === command.playerId)!.hand.push(selected);
       drawnIds.push(selected.instanceId);
+      checkMercy(next);
+      if (next.players.find(({ id }) => id === command.playerId)!.eliminated) break;
     } while (!isPlayable(next, selected));
     events.push({ type: "cards-drawn", playerId: command.playerId, cardIds: drawnIds });
   }
-  playCard(next, command.playerId, selected!, events);
+  if (next.players.find(({ id }) => id === command.playerId)!.eliminated) {
+    if (!next.winner) advanceTurn(next, events);
+  } else {
+    playCard(next, command.playerId, selected!, events, command.type === "play-card" && command.declareUno === true);
+  }
   next.revision++;
   return { ok: true, state: next, events };
 }
