@@ -83,15 +83,20 @@ export type ServerMessage =
   | { version: 1; type: "rejection"; commandId?: string; code: CommandErrorCode; message: string; revision?: number }
   | { version: 1; type: "lifecycle"; event: "player-connected" | "player-disconnected" | "player-eliminated" | "room-closed"; playerId?: string };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  if (value === null || typeof value !== "object") return false;
+function captureRecord(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== "object") return null;
   const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return false;
-  // The wire format consists only of JSON data properties, never getters or symbols.
-  return Reflect.ownKeys(value).every((key) => {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
-    return typeof key === "string" && descriptor.enumerable && Object.hasOwn(descriptor, "value");
-  });
+  if (prototype !== Object.prototype && prototype !== null) return null;
+  const captured: Record<string, unknown> = Object.create(null);
+  // Capture each own data descriptor once. Never read a caller-owned property again:
+  // a proxy's get trap could return a different value after it has been validated.
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") return null;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, "value")) return null;
+    captured[key] = descriptor.value;
+  }
+  return captured;
 }
 
 function hasKeys(value: Record<string, unknown>, required: string[], optional: string[] = []): boolean {
@@ -107,8 +112,9 @@ function isColor(value: unknown): value is CardColor {
   return value === "red" || value === "yellow" || value === "green" || value === "blue";
 }
 
-function parseCommand(value: unknown): ClientCommand | null {
-  if (!isRecord(value)) return null;
+function parseCommand(input: unknown): ClientCommand | null {
+  const value = captureRecord(input);
+  if (!value) return null;
   switch (value.type) {
     case "start-game":
     case "leave-room":
@@ -137,10 +143,11 @@ function parseCommand(value: unknown): ClientCommand | null {
 }
 
 /** Validates decoded JSON. Text, byte limits and first-message authentication belong to the gateway. */
-export function parseClientMessage(value: unknown): ParseResult<ClientEnvelope> {
+export function parseClientMessage(input: unknown): ParseResult<ClientEnvelope> {
   const invalid = { ok: false, code: "INVALID_MESSAGE" } as const;
   try {
-    if (!isRecord(value) || !hasKeys(value, ["version", "type", "commandId", "revision", "command"]) ||
+    const value = captureRecord(input);
+    if (!value || !hasKeys(value, ["version", "type", "commandId", "revision", "command"]) ||
       value.version !== 1 || value.type !== "command" || !isIdentifier(value.commandId) || value.commandId.length > 64 ||
       typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 0) return invalid;
     const command = parseCommand(value.command);

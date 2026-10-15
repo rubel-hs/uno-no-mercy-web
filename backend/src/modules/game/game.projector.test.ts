@@ -230,4 +230,45 @@ describe("version 1 command parsing", () => {
     input.revision = -1;
     expect(parsed.value).toEqual({ version: 1, type: "command", commandId: "cmd-1", revision: 0, command: { type: "play-card", cardId: "safe" } });
   });
+
+  // Catches validation of an early proxy read followed by acceptance of a different value.
+  test.each([
+    { field: "revision", validReads: 3, changed: -1 },
+    { field: "commandId", validReads: 2, changed: { unvalidated: true } },
+  ])("captures envelope $field data before validating a changing-value proxy", ({ field, validReads, changed }) => {
+    let reads = 0;
+    const input = new Proxy(envelope(), {
+      get(target, key) {
+        if (key === field && ++reads > validReads) return changed;
+        return Reflect.get(target, key);
+      },
+    });
+    expect(parseClientMessage(input)).toEqual({
+      ok: true,
+      value: { version: 1, type: "command", commandId: "cmd-1", revision: 0, command: { type: "draw-until-playable" } },
+    });
+  });
+
+  // Catches the same validation/return race in every nested command property family.
+  test.each([
+    { command: { type: "play-card", cardId: "safe" }, field: "cardId" },
+    { command: { type: "play-card", cardId: "safe" }, field: "type" },
+    { command: { type: "play-card", cardId: "safe", declareUno: true }, field: "declareUno" },
+    { command: { type: "choose-color", color: "red" }, field: "color" },
+    { command: { type: "choose-swap-target", targetPlayerId: "b" }, field: "targetPlayerId" },
+  ])("captures nested $field data before validating a changing-value proxy", ({ command, field }) => {
+    let reads = 0;
+    const input = new Proxy(command, {
+      get(target, key) {
+        if (key === field && ++reads > 1) return { unvalidated: true };
+        return Reflect.get(target, key);
+      },
+    });
+    const parsed = parseClientMessage(envelope(input));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("Expected captured valid command");
+    expect(parsed.value.command).toEqual(command as ClientCommand);
+    expect(Object.getPrototypeOf(parsed.value)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(parsed.value.command)).toBe(Object.prototype);
+  });
 });
