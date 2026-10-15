@@ -55,6 +55,21 @@ describe("game board shell", () => {
     expect(playerCard!.style.transition).toBe("none");
   });
 
+  test("isolates each game card stacking context so marks and corners cannot bleed over adjacent cards", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open dev mode" }));
+    fireEvent.click(screen.getByRole("button", { name: "Inspect gameboard" }));
+
+    const playerCard = document.querySelector<HTMLElement>(
+      ".player-seat--bottom .player-seat__card",
+    );
+    expect(playerCard).not.toBeNull();
+
+    const styles = getComputedStyle(playerCard!);
+    expect(styles.isolation).toBe("isolate");
+  });
+
   test("aligns every player card upright on a flat baseline", () => {
     render(<App />);
 

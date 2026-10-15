@@ -287,6 +287,7 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 4px; }
 .game-card {
   --card-w: 92px;
   position: relative;
+  isolation: isolate;
   flex: 0 0 auto;
   width: var(--card-w);
   aspect-ratio: 5 / 7;
