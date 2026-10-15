@@ -3,9 +3,13 @@ import { Hono } from "hono";
 import { type AppConfig, loadConfig } from "./config/env";
 import { createCorsMiddleware } from "./middleware/cors";
 import { healthRoutes } from "./modules/health/health.route";
+import { createRoomRoutes } from "./modules/rooms/room.route";
+import { createRoomStore } from "./modules/rooms/room.store";
+import type { RoomStore } from "./modules/rooms/room.types";
 
-export function createApp(config: AppConfig = loadConfig()): Hono {
+export function createApp(config: AppConfig = loadConfig(), services: { roomStore?: RoomStore } = {}): Hono {
   const app = new Hono();
+  const roomStore = services.roomStore ?? createRoomStore();
 
   app.use("/api/*", createCorsMiddleware(config.corsOrigins));
   app.get("/", (context) =>
@@ -15,10 +19,12 @@ export function createApp(config: AppConfig = loadConfig()): Hono {
       message: "UNO No Mercy API is running",
       endpoints: {
         health: "/api/health",
+        createRoom: "/api/rooms",
       },
     }),
   );
   app.route("/api/health", healthRoutes);
+  app.route("/api/rooms", createRoomRoutes(roomStore));
 
   app.notFound((context) => context.json({ error: "Not found" }, 404));
   app.onError((error, context) => {

@@ -28,6 +28,7 @@ describe("createApp", () => {
       message: "UNO No Mercy API is running",
       endpoints: {
         health: "/api/health",
+        createRoom: "/api/rooms",
       },
     });
   });
@@ -56,5 +57,42 @@ describe("createApp", () => {
     expect(response.status).toBe(404);
     expect(response.headers.get("content-type")).toContain("application/json");
     expect(await response.json()).toEqual({ error: "Not found" });
+  });
+
+  test("permits JSON room POST preflight from configured browser origins", async () => {
+    const response = await createApp(config).request("/api/rooms", {
+      method: "OPTIONS",
+      headers: {
+        Origin: "http://localhost:5173",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Content-Type",
+      },
+    });
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+    expect(response.headers.get("access-control-allow-methods")?.split(/,\s*/)).toEqual(["GET", "POST", "OPTIONS"]);
+    expect(response.headers.get("access-control-allow-headers")?.toLowerCase()).toContain("content-type");
+  });
+
+  test("does not grant preflight origin access to unconfigured origins", async () => {
+    const response = await createApp(config).request("/api/rooms/ABCDEF/players", {
+      method: "OPTIONS",
+      headers: { Origin: "https://untrusted.example", "Access-Control-Request-Method": "POST" },
+    });
+    expect(response.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
+  test("preserves no-argument application construction", async () => {
+    expect((await createApp().request("/api/health")).status).toBe(200);
+  });
+
+  test("default stores persist across requests and stay isolated between apps", async () => {
+    const app = createApp(config);
+    const created = await app.request("/api/rooms", { method: "POST", headers: { "Content-Type": "application/json" }, body: '{"displayName":"Host"}' });
+    expect(created.status).toBe(201);
+    const { roomCode } = await created.json() as { roomCode: string };
+    const request = { method: "POST", headers: { "Content-Type": "application/json" }, body: '{"displayName":"Guest"}' };
+    expect((await app.request(`/api/rooms/${roomCode}/players`, request)).status).toBe(201);
+    expect((await createApp(config).request(`/api/rooms/${roomCode}/players`, request)).status).toBe(404);
   });
 });
