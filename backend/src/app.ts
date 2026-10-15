@@ -8,6 +8,16 @@ export function createApp(config: AppConfig = loadConfig()): Hono {
   const app = new Hono();
 
   app.use("/api/*", createCorsMiddleware(config.corsOrigins));
+  app.get("/", (context) =>
+    context.json({
+      status: "ok",
+      service: "uno-no-mercy-api",
+      message: "UNO No Mercy API is running",
+      endpoints: {
+        health: "/api/health",
+      },
+    }),
+  );
   app.route("/api/health", healthRoutes);
 
   app.notFound((context) => context.json({ error: "Not found" }, 404));

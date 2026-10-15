@@ -18,6 +18,20 @@ describe("createApp", () => {
     });
   });
 
+  test("returns status and endpoints on root GET /", async () => {
+    const response = await createApp(config).request("/");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      status: "ok",
+      service: "uno-no-mercy-api",
+      message: "UNO No Mercy API is running",
+      endpoints: {
+        health: "/api/health",
+      },
+    });
+  });
+
   test("allows configured browser origins", async () => {
     const response = await createApp(config).request("/api/health", {
       headers: { Origin: "http://localhost:5173" },
