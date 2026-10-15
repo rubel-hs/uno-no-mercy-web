@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { createApp } from "../../app";
 import { createRoomStore } from "./room.store";
 import type { RoomCredentials, RoomResult, RoomStoreDeps } from "./room.types";
@@ -170,5 +170,119 @@ describe("room REST contract", () => {
     expect(await response.json()).toEqual({ error: "Not found" });
     expect(store.getRoom("ABCDEF")).toEqual(before);
     expect(store.getRoom("GHJKLM")).toBeNull();
+  });
+});
+
+describe("room request body limits", () => {
+  for (const path of ["/api/rooms", "/api/rooms/ABCDEF/players"]) {
+    test.each([undefined, "1", "invalid", "2097174"])(`rejects an oversized streamed ${path} body regardless of Content-Length %s`, async (contentLength) => {
+      const { store, app } = fixture();
+      value(store.createRoom("Host"));
+      const before = store.getRoom("ABCDEF");
+      const bytes = new TextEncoder().encode(" ".repeat(2_097_152) + '{"displayName":"Guest"}');
+      let offset = 0;
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (offset === bytes.length) { controller.close(); return; }
+          const end = Math.min(offset + 256, bytes.length);
+          controller.enqueue(bytes.subarray(offset, end));
+          offset = end;
+        },
+        cancel() { cancelled = true; },
+      });
+      const headers = new Headers({ "Content-Type": "application/json" });
+      if (contentLength !== undefined) headers.set("Content-Length", contentLength);
+      else headers.set("Transfer-Encoding", "chunked");
+
+      const response = await app.request(path, { method: "POST", headers, body });
+
+      await rejection(response, 413, "REQUEST_TOO_LARGE");
+      expect(cancelled).toBe(true);
+      expect(offset).toBeLessThan(bytes.length);
+      expect(store.getRoom("ABCDEF")).toEqual(before);
+      expect(store.getRoom("GHJKLM")).toBeNull();
+      expect(value(store.joinRoom("ABCDEF", "Valid")).token).toBe("private-token-2");
+    });
+
+    test(`rejects an oversized buffered ${path} request`, async () => {
+      const { store, post } = fixture();
+      value(store.createRoom("Host"));
+      const before = store.getRoom("ABCDEF");
+      await rejection(await post(path, " ".repeat(2_097_152) + '{"displayName":"Guest"}'), 413, "REQUEST_TOO_LARGE");
+      expect(store.getRoom("ABCDEF")).toEqual(before);
+      expect(store.getRoom("GHJKLM")).toBeNull();
+    });
+
+    test(`accepts exactly 1024 UTF-8 bytes at ${path} and rejects the next byte`, async () => {
+      const { store, post } = fixture();
+      value(store.createRoom("Host"));
+      const json = '{"displayName":"Guest"}';
+      const accepted = " ".repeat(1024 - json.length) + json;
+      const before = store.getRoom("ABCDEF");
+      await rejection(await post(path, " " + accepted), 413, "REQUEST_TOO_LARGE");
+      expect(store.getRoom("ABCDEF")).toEqual(before);
+      expect(store.getRoom("GHJKLM")).toBeNull();
+      expect((await post(path, accepted)).status).toBe(201);
+    });
+
+    test(`counts UTF-8 bytes rather than string length at ${path}`, async () => {
+      const { store, post } = fixture();
+      value(store.createRoom("Host"));
+      const before = store.getRoom("ABCDEF");
+      // 1,036 UTF-8 bytes but only 1,012 JavaScript characters; name is valid.
+      const body = " ".repeat(970) + JSON.stringify({ displayName: "é".repeat(24) });
+      expect(body.length).toBeLessThan(1024);
+      expect(new TextEncoder().encode(body).length).toBeGreaterThan(1024);
+      await rejection(await post(path, body), 413, "REQUEST_TOO_LARGE");
+      expect(store.getRoom("ABCDEF")).toEqual(before);
+    });
+
+    test(`keeps media-type validation before reading ${path} bodies`, async () => {
+      const { store, app } = fixture();
+      const body = new ReadableStream<Uint8Array>({ start(controller) { controller.error(new Error("Body must not be read")); } });
+      const response = await app.request(path, { method: "POST", headers: { "Content-Type": "text/plain" }, body });
+      await rejection(response, 415, "UNSUPPORTED_MEDIA_TYPE");
+      expect(store.getRoom("ABCDEF")).toBeNull();
+    });
+
+    test(`accepts a small stream with split multibyte names and an incorrect large length at ${path}`, async () => {
+      const { store, app } = fixture();
+      value(store.createRoom("Host"));
+      const bytes = new TextEncoder().encode('{"displayName":"éGuest"}');
+      let offset = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (offset === bytes.length) controller.close();
+          else controller.enqueue(bytes.subarray(offset, ++offset));
+        },
+      });
+      const response = await app.request(path, { method: "POST", headers: { "Content-Type": "application/json", "Content-Length": "999999" }, body });
+      expect(response.status).toBe(201);
+      expect(store.getRoom(path === "/api/rooms" ? "GHJKLM" : "ABCDEF")?.players.at(-1)?.name).toBe("éGuest");
+    });
+  }
+});
+
+describe("unexpected room store exceptions", () => {
+  test.each(["createRoom", "joinRoom"] as const)("logs a sanitized diagnostic for %s without disclosing the exception or request", async (operation) => {
+    const { store } = fixture();
+    value(store.createRoom("Host"));
+    const before = store.getRoom("ABCDEF");
+    const app = createApp(config, { roomStore: {
+      ...store,
+      [operation]: () => { throw new Error("private-token-1 hidden diagnostic"); },
+    } });
+    const log = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const path = operation === "createRoom" ? "/api/rooms" : "/api/rooms/ABCDEF/players";
+      const response = await app.request(path, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: '{"displayName":"Sensitive name"}',
+      });
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: { code: "INTERNAL_ERROR", message: "The request could not be completed." } });
+      expect(log.mock.calls).toEqual([[`Unexpected room store exception during ${operation}.`]]);
+      expect(store.getRoom("ABCDEF")).toEqual(before);
+    } finally { log.mockRestore(); }
   });
 });

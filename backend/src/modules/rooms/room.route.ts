@@ -1,6 +1,8 @@
 import { Hono, type Context } from "hono";
 import type { RoomCredentials, RoomResult, RoomStore } from "./room.types";
 
+const MAX_BODY_BYTES = 1024;
+
 function failure(context: Context, code: string) {
   // Only these public errors are possible in room setup. Never serialize a
   // store result, diagnostic message, revision, or exception to the browser.
@@ -9,6 +11,8 @@ function failure(context: Context, code: string) {
       return context.json({ error: { code, message: "Expected a JSON object with only displayName." } }, 400);
     case "UNSUPPORTED_MEDIA_TYPE":
       return context.json({ error: { code, message: "Use application/json." } }, 415);
+    case "REQUEST_TOO_LARGE":
+      return context.json({ error: { code, message: "Request body must not exceed 1024 bytes." } }, 413);
     case "INVALID_NAME":
       return context.json({ error: { code, message: "Enter a name between 1 and 24 characters." } }, 400);
     case "ROOM_NOT_FOUND":
@@ -28,8 +32,28 @@ async function parseName(context: Context): Promise<{ name: string } | { code: s
   const mediaType = context.req.header("Content-Type")?.split(";")[0]?.trim().toLowerCase();
   if (mediaType !== "application/json") return { code: "UNSUPPORTED_MEDIA_TYPE" };
   let body: unknown;
-  try { body = await context.req.json(); }
+  const reader = context.req.raw.body?.getReader();
+  try {
+    let bytes = 0;
+    let text = "";
+    const decoder = new TextDecoder();
+    if (reader) {
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        // Count bytes as they arrive; Content-Length is not authoritative.
+        bytes += chunk.value.byteLength;
+        if (bytes > MAX_BODY_BYTES) {
+          void reader.cancel().catch(() => {});
+          return { code: "REQUEST_TOO_LARGE" };
+        }
+        text += decoder.decode(chunk.value, { stream: true });
+      }
+    }
+    body = JSON.parse(text + decoder.decode());
+  }
   catch { return { code: "INVALID_REQUEST" }; }
+  finally { reader?.releaseLock(); }
   if (body === null || typeof body !== "object" || Array.isArray(body) ||
     Object.keys(body).length !== 1 || !Object.hasOwn(body, "displayName")) return { code: "INVALID_REQUEST" };
   const name = (body as Record<string, unknown>).displayName;
@@ -49,13 +73,19 @@ export function createRoomRoutes(store: RoomStore): Hono {
     const input = await parseName(context);
     if ("code" in input) return failure(context, input.code);
     try { return respond(context, store.createRoom(input.name)); }
-    catch { return failure(context, "INTERNAL_ERROR"); }
+    catch {
+      console.error("Unexpected room store exception during createRoom.");
+      return failure(context, "INTERNAL_ERROR");
+    }
   });
   routes.post("/:roomCode/players", async (context) => {
     const input = await parseName(context);
     if ("code" in input) return failure(context, input.code);
     try { return respond(context, store.joinRoom(context.req.param("roomCode"), input.name)); }
-    catch { return failure(context, "INTERNAL_ERROR"); }
+    catch {
+      console.error("Unexpected room store exception during joinRoom.");
+      return failure(context, "INTERNAL_ERROR");
+    }
   });
   return routes;
 }
