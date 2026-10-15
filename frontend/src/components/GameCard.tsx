@@ -9,6 +9,8 @@ type GameCardProps = {
   pointerOnly?: boolean;
   rotation?: -90 | 90;
   size?: "small" | "medium" | "large";
+  onClick?: () => void;
+  disabled?: boolean;
 };
 
 const cardArtwork = import.meta.glob(
@@ -17,8 +19,8 @@ const cardArtwork = import.meta.glob(
 ) as Record<string, string>;
 
 const symbolParts: Partial<Record<CardDefinition["kind"], string[]>> = {
-  roulette: ["R", "Y", "G", "B"],
-  wild: ["R", "Y", "G", "B"],
+  "wild-color-roulette": ["R", "Y", "G", "B"],
+  "wild-reverse-draw-4": ["R", "Y", "G", "B"],
 };
 
 export function GameCard({
@@ -28,6 +30,8 @@ export function GameCard({
   pointerOnly = false,
   rotation,
   size = "medium",
+  onClick,
+  disabled = false,
 }: GameCardProps) {
   const artworkUrl = cardArtwork[`../assets/cards/${card.assetFile}`];
   const style: CSSProperties & { "--card-tone": string } = {
@@ -40,7 +44,10 @@ export function GameCard({
   return (
     <article
       aria-label={`${card.label} card`}
-      className={`game-card game-card--${size} game-card--${card.color} game-card--${card.kind} ${className}`}
+      className={`game-card game-card--${size} game-card--${card.color} game-card--${card.kind} ${
+        disabled ? "is-disabled" : ""
+      } ${className}`}
+      onClick={disabled ? undefined : onClick}
       style={style}
     >
       {artworkUrl ? (

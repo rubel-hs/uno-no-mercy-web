@@ -5,15 +5,14 @@ export type CardKind =
   | "number"
   | "skip"
   | "reverse"
-  | "draw-two"
-  | "draw-four"
+  | "draw-2"
+  | "draw-4"
   | "discard-all"
   | "skip-everyone"
-  | "wild"
-  | "draw-six"
-  | "draw-ten"
-  | "reverse-draw-four"
-  | "roulette"
+  | "wild-reverse-draw-4"
+  | "wild-color-roulette"
+  | "draw-6"
+  | "draw-10"
   | "back";
 
 export type CardDefinition = {
@@ -75,22 +74,35 @@ export const numberCards: CardDefinition[] = CARD_COLORS.flatMap((color) =>
 export const actionCards: CardDefinition[] = [
   ...coloredCards("Skip", "skip", "⊘"),
   ...coloredCards("Reverse", "reverse", "↻"),
-  ...coloredCards("Draw 2", "draw-two", "+2"),
+  ...coloredCards("Draw 2", "draw-2", "+2"),
   ...coloredCards("Discard All", "discard-all", "DISCARD\nALL"),
+  ...coloredCards("Draw 4", "draw-4", "+4"),
   ...coloredCards("Skip Everyone", "skip-everyone", "SKIP\nALL"),
 ];
 
 export const wildCards: CardDefinition[] = [
-  createCard("wild", "Wild", "Wild", "wild", "wild", "WILD"),
-  createCard("wild-draw-4", "Wild Draw 4", "Draw 4", "wild", "draw-four", "+4"),
-  createCard("wild-draw-6", "Wild Draw 6", "Wild Draw 6", "wild", "draw-six", "+6"),
-  createCard("wild-draw-10", "Wild Draw 10", "Wild Draw 10", "wild", "draw-ten", "+10"),
+  createCard(
+    "wild-draw-6",
+    "Wild Draw 6",
+    "Wild Draw 6",
+    "wild",
+    "draw-6",
+    "+6",
+  ),
+  createCard(
+    "wild-draw-10",
+    "Wild Draw 10",
+    "Wild Draw 10",
+    "wild",
+    "draw-10",
+    "+10",
+  ),
   createCard(
     "wild-reverse-draw-4",
     "Wild Reverse Draw 4",
     "Wild Reverse Draw 4",
     "wild",
-    "reverse-draw-four",
+    "wild-reverse-draw-4",
     "↻\n+4",
   ),
   createCard(
@@ -98,7 +110,7 @@ export const wildCards: CardDefinition[] = [
     "Wild Color Roulette",
     "Wild Color Roulette",
     "wild",
-    "roulette",
+    "wild-color-roulette",
     "ROULETTE",
   ),
 ];
@@ -114,8 +126,9 @@ export const cardBack = createCard(
   "UNO",
 );
 
-export const findCard = (id: string) => {
-  const card = cardCatalog.find((candidate) => candidate.id === id);
+export const findCard = (id: string): CardDefinition => {
+  const normalizedId = id.replace(/-draw-two$/, "-draw-2");
+  const card = cardCatalog.find((candidate) => candidate.id === normalizedId);
   if (!card) throw new Error(`Unknown card: ${id}`);
   return card;
 };

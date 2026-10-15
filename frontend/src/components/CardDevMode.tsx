@@ -18,10 +18,10 @@ const wildFamilies = groupByFamily(wildCards);
 
 const groups: CardGroup[] = [
   { name: "Number", description: "Every number in all four table colors.", cards: numberFamilies.get("Number") ?? [] },
-  ...["Skip", "Reverse", "Draw 2", "Discard All", "Skip Everyone"].map((name) => ({
+  ...["Skip", "Reverse", "Draw 2", "Discard All", "Draw 4", "Skip Everyone"].map((name) => ({
     name, description: "Red, yellow, green, and blue variants.", cards: actionFamilies.get(name) ?? [],
   })),
-  ...["Draw 4", "Wild", "Wild Draw 6", "Wild Draw 10", "Wild Reverse Draw 4", "Wild Color Roulette"].map((name) => ({
+  ...["Wild Draw 6", "Wild Draw 10", "Wild Reverse Draw 4", "Wild Color Roulette"].map((name) => ({
     name, description: "A high-impact No Mercy wild card.", cards: wildFamilies.get(name) ?? [],
   })),
   { name: "Card back", description: "Shared reverse artwork for hidden hands and the draw pile.", cards: [cardBack] },

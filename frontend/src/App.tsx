@@ -4,6 +4,7 @@ import { CardDevMode } from "./components/CardDevMode";
 import { DevModeHub } from "./components/DevModeHub";
 import { GameBoard } from "./components/GameBoard";
 import { HomeScreen } from "./components/HomeScreen";
+import { LiveGameScreen } from "./components/LiveGameScreen";
 import { LobbyScreen } from "./components/LobbyScreen";
 import { RoomDialog } from "./components/RoomDialog";
 import { useGameSession } from "./game/useGameSession";
@@ -87,7 +88,13 @@ export default function App() {
               ← Leave room
             </button>
           </header>
-          <GameBoard />
+          <LiveGameScreen
+            connectionState={session.status}
+            onCommand={session.send}
+            onLeaveRoom={session.leave}
+            reconnectAttempt={session.reconnectAttempt}
+            snapshot={session.snapshot}
+          />
         </main>
       );
     }

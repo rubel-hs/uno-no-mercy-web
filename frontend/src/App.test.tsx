@@ -202,7 +202,7 @@ describe("game board shell", () => {
     expect(screen.queryByRole("group", { name: "Stacked power cards" })).not.toBeInTheDocument();
 
     rerender(
-      <GameBoard stackedCards={[findCard("blue-draw-two"), findCard("wild-draw-4")]} />,
+      <GameBoard stackedCards={[findCard("blue-draw-2"), findCard("blue-draw-4")]} />,
     );
 
     const stack = screen.getByRole("group", { name: "Stacked power cards" });
@@ -210,14 +210,14 @@ describe("game board shell", () => {
 
     expect(stackedCards.map((card) => card.getAttribute("aria-label"))).toEqual([
       "blue Draw 2 card",
-      "Wild Draw 4 card",
+      "blue Draw 4 card",
     ]);
     const layers = stack.querySelectorAll<HTMLElement>(".pile__stacked-card");
     expect(Array.from(layers, (layer) => layer.style.zIndex)).toEqual(["1", "2"]);
 
     rerender(
       <GameBoard
-        stackedCards={Array.from({ length: 8 }, () => findCard("blue-draw-two"))}
+        stackedCards={Array.from({ length: 8 }, () => findCard("blue-draw-2"))}
       />,
     );
 
@@ -306,7 +306,6 @@ describe("game board shell", () => {
       "Draw 4",
       "Discard All",
       "Skip Everyone",
-      "Wild",
       "Wild Draw 6",
       "Wild Draw 10",
       "Wild Reverse Draw 4",
