@@ -92,6 +92,8 @@ export function PlayerSeat({
       </div>
       <div
         className="player-seat__hand"
+        role={position === "bottom" ? "region" : undefined}
+        aria-label={position === "bottom" ? "Your cards" : undefined}
         aria-hidden={position !== "bottom" ? "true" : undefined}
         style={
           dynamicOverlap !== undefined

@@ -1,7 +1,9 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { findCard } from "../game/cards";
 import { calculateHandOverlap, PlayerSeat } from "./PlayerSeat";
+
+afterEach(cleanup);
 
 describe("PlayerSeat static cards", () => {
   it("renders hand cards strictly static with zero hover elevation, tilt, or floating", () => {
@@ -123,4 +125,27 @@ describe("Name strip card count badge", () => {
     expect(badge).toHaveTextContent("9");
   });
 });
+
+describe("Scrollable large hand container", () => {
+  it("renders all cards cleanly without truncation when hand size is large (20 cards)", () => {
+    const cards = Array.from({ length: 20 }, (_, i) => findCard("blue-0"));
+    const cardIds = Array.from({ length: 20 }, (_, i) => `card-${i}`);
+    render(
+      <PlayerSeat
+        active
+        cards={cards}
+        cardIds={cardIds}
+        count={20}
+        name="You"
+        orientation="horizontal"
+        points={0}
+        position="bottom"
+      />,
+    );
+    const handContainer = screen.getByRole("region", { name: "Your cards" });
+    expect(handContainer).toBeInTheDocument();
+    expect(handContainer.querySelectorAll(".player-seat__card").length).toBe(20);
+  });
+});
+
 

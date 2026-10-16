@@ -685,7 +685,19 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 4px; }
 .player-seat--bottom .player-seat__score i { line-height: 1; }
 .player-seat--bottom .player-seat__meta small { font-size: .68rem; }
 .player-seat--bottom .player-seat__score i { display: inline-grid; place-items: center; }
-.player-seat--bottom .player-seat__hand { align-items: flex-end; padding: 10px 28px 0; }
+.player-seat--bottom .player-seat__hand {
+  align-items: flex-end;
+  max-width: 100vw;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  scroll-behavior: smooth;
+  padding: 10px 24px 4px;
+}
+.player-seat--bottom .player-seat__hand::-webkit-scrollbar {
+  display: none;
+}
 .player-seat--bottom .player-seat__card {
   transition: transform 0.15s ease, z-index 0.15s ease;
 }
