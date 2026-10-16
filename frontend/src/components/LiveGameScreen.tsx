@@ -215,13 +215,21 @@ export function LiveGameScreen({
       {snapshot.pendingChoice && (
         <GameChoiceDialog
           choice={snapshot.pendingChoice}
-          onChooseColor={(color: CardColor) => onCommand({ type: "choose-color", color })}
-          onChooseRouletteColor={(color: CardColor) =>
-            onCommand({ type: "choose-roulette-color", color })
-          }
-          onChooseSwapTarget={(targetPlayerId: string) =>
-            onCommand({ type: "choose-swap-target", targetPlayerId })
-          }
+          onChooseColor={(color: CardColor) => {
+            if (!isReconnecting) {
+              onCommand({ type: "choose-color", color });
+            }
+          }}
+          onChooseRouletteColor={(color: CardColor) => {
+            if (!isReconnecting) {
+              onCommand({ type: "choose-roulette-color", color });
+            }
+          }}
+          onChooseSwapTarget={(targetPlayerId: string) => {
+            if (!isReconnecting) {
+              onCommand({ type: "choose-swap-target", targetPlayerId });
+            }
+          }}
           players={snapshot.players}
           viewerId={snapshot.viewerId}
         />

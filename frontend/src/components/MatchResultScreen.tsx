@@ -1,3 +1,5 @@
+import { useEffect, useRef } from "react";
+
 import type { ClientCommand, PlayerSnapshot } from "../game/protocol";
 
 interface MatchResultScreenProps {
@@ -15,6 +17,12 @@ export function MatchResultScreen({
   onCommand,
   onLeaveRoom,
 }: MatchResultScreenProps) {
+  const titleRef = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    titleRef.current?.focus();
+  }, []);
+
   const isMatchComplete = snapshot.matchStatus === "match-complete";
   const isReadOnly = connectionState !== "connected";
   const canStartNextRound = snapshot.matchStatus === "round-complete" &&
@@ -33,11 +41,30 @@ export function MatchResultScreen({
       aria-labelledby="match-result-title"
       aria-modal="true"
       className="game-winner-overlay"
+      onKeyDown={(event) => {
+        if (event.key !== "Tab") return;
+
+        const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), [tabindex="0"]',
+        ));
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        const active = document.activeElement;
+
+        if (!first) {
+          event.preventDefault();
+          titleRef.current?.focus();
+        } else if (!controls.some((control) => control === active) ||
+          (event.shiftKey ? active === first : active === last)) {
+          event.preventDefault();
+          (event.shiftKey ? last : first).focus();
+        }
+      }}
       role="dialog"
     >
       <div className="game-winner-card match-result-card">
         <span className="section-kicker">First to {snapshot.targetScore} points</span>
-        <h2 id="match-result-title">
+        <h2 id="match-result-title" ref={titleRef} tabIndex={-1}>
           {isMatchComplete ? "Match complete" : `Round ${roundNumber} complete`}
         </h2>
         <h3 className="game-winner-name">

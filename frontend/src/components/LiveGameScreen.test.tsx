@@ -82,6 +82,61 @@ function createRoundSnapshot(overrides: Partial<PlayerSnapshot> = {}): PlayerSna
 
 describe("LiveGameScreen", () => {
   describe("server-driven match scores and results", () => {
+    test.each([
+      { matchStatus: "round-complete" as const, title: "Round 3 complete" },
+      { matchStatus: "match-complete" as const, title: "Match complete" },
+    ])("moves initial focus to the accessible $title heading", ({ matchStatus, title }) => {
+      render(<LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={createRoundSnapshot({ matchStatus })} />);
+
+      const dialog = screen.getByRole("dialog", { name: title });
+      expect(within(dialog).getByRole("heading", { name: title })).toHaveFocus();
+    });
+
+    test("keeps forward and reverse Tab navigation inside the result dialog", () => {
+      render(
+        <>
+          <button type="button">Outside the dialog</button>
+          <LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={createRoundSnapshot()} />
+        </>,
+      );
+      const title = screen.getByRole("heading", { name: "Round 3 complete" });
+      const first = screen.getByRole("region", { name: "Round score details" });
+      const last = screen.getByRole("button", { name: "Return to Lobby" });
+
+      title.focus();
+      fireEvent.keyDown(title, { key: "Tab" });
+      expect(first).toHaveFocus();
+
+      last.focus();
+      fireEvent.keyDown(last, { key: "Tab" });
+      expect(first).toHaveFocus();
+
+      fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+      expect(last).toHaveFocus();
+
+      title.focus();
+      fireEvent.keyDown(title, { key: "Tab", shiftKey: true });
+      expect(last).toHaveFocus();
+    });
+
+    test("skips disabled result actions while reconnecting and retains a focus fallback", () => {
+      const snapshot = createRoundSnapshot();
+      const { rerender } = render(<LiveGameScreen connectionState="reconnecting" onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={snapshot} />);
+      const details = screen.getByRole("region", { name: "Round score details" });
+      details.focus();
+      fireEvent.keyDown(details, { key: "Tab" });
+      expect(details).toHaveFocus();
+      fireEvent.keyDown(details, { key: "Tab", shiftKey: true });
+      expect(details).toHaveFocus();
+
+      rerender(<LiveGameScreen connectionState="reconnecting" onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={{ ...snapshot, roundResult: null }} />);
+      const dialog = screen.getByRole("dialog", { name: "Round 3 complete" });
+      fireEvent.keyDown(dialog, { key: "Tab" });
+      expect(screen.getByRole("heading", { name: "Round 3 complete" })).toHaveFocus();
+      fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+      expect(screen.getByRole("heading", { name: "Round 3 complete" })).toHaveFocus();
+    });
+
     test("renders cumulative points by player ID on every active seat", () => {
       render(<LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={createGameSnapshot()} />);
 
@@ -252,6 +307,23 @@ describe("LiveGameScreen", () => {
   });
 
   describe("player interactions and commands", () => {
+    test.each([
+      { type: "choose-color" as const, button: "Yellow", command: { type: "choose-color", color: "yellow" } },
+      { type: "choose-roulette-color" as const, button: "Green", command: { type: "choose-roulette-color", color: "green" } },
+      { type: "choose-swap-target" as const, button: "Bob", command: { type: "choose-swap-target", targetPlayerId: "p2" } },
+    ])("blocks $type while reconnecting and resumes dispatch once connected", ({ type, button, command }) => {
+      const onCommand = vi.fn();
+      const snapshot = createGameSnapshot({ pendingChoice: { type, playerId: "p1" }, allowedControls: [type] });
+      const { rerender } = render(<LiveGameScreen connectionState="reconnecting" onCommand={onCommand} onLeaveRoom={vi.fn()} snapshot={snapshot} />);
+
+      fireEvent.click(screen.getByRole("button", { name: button }));
+      expect(onCommand).not.toHaveBeenCalled();
+
+      rerender(<LiveGameScreen connectionState="connected" onCommand={onCommand} onLeaveRoom={vi.fn()} snapshot={snapshot} />);
+      fireEvent.click(screen.getByRole("button", { name: button }));
+      expect(onCommand).toHaveBeenCalledExactlyOnceWith(command);
+    });
+
     test("clicking a legal card sends play-card command; illegal card cannot be played", () => {
       const onCommand = vi.fn();
       const snapshot = createGameSnapshot({
