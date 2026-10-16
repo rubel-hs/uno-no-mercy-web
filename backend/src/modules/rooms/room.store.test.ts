@@ -426,6 +426,55 @@ describe("room-owned match lifecycle", () => {
     });
   });
 
+  test("carries multi-round match progression to match-complete at the target score", () => {
+    const round1Hands = [
+      winningHand,
+      ["wild-draw-6", "blue-1", "blue-2", "blue-3", "blue-4", "blue-8", "blue-9"],
+      ["green-draw-4", "green-1", "green-2", "green-3", "green-4", "green-8", "green-9"],
+      ["yellow-draw-4", "yellow-1", "yellow-2", "yellow-3", "yellow-4", "yellow-8", "yellow-9"],
+    ];
+    const round2Hands = [
+      Array(7).fill("wild-reverse-draw-4"),
+      winningHand,
+      Array(7).fill("wild-color-roulette"),
+      ["wild-reverse-draw-4", "wild-color-roulette", "wild-draw-6", "wild-draw-6", "wild-draw-6", "wild-draw-6", "wild-draw-10"],
+    ];
+    const room = game(round1Hands, {
+      random: roundDeals([
+        { hands: round1Hands, dealerIndex: 3 },
+        { hands: round2Hands, dealerIndex: 0 },
+      ]),
+    });
+    value(room.play(0, "red-discard-all"));
+    const round1Match = room.store.getRoom(room.roomCode)!.match;
+    expect(round1Match).toMatchObject({
+      status: "round-complete",
+      roundNumber: 1,
+      scoresByPlayerId: { [room.seats[0]!.playerId]: 171 },
+      winner: null,
+      lastRoundResult: { roundNumber: 1, winnerId: room.seats[0]!.playerId, matchWinnerId: null },
+    });
+
+    value(room.command(0, { type: "start-next-round" }));
+    expect(room.store.getRoom(room.roomCode)!.match).toMatchObject({
+      status: "round-active",
+      roundNumber: 2,
+      dealerIndex: 0,
+      scoresByPlayerId: { [room.seats[0]!.playerId]: 171 },
+    });
+
+    value(room.play(1, "red-discard-all"));
+    const finalMatch = room.store.getRoom(room.roomCode)!.match;
+    expect(finalMatch).toMatchObject({
+      status: "match-complete",
+      roundNumber: 2,
+      winner: room.seats[1]!.playerId,
+      scoresByPlayerId: { [room.seats[0]!.playerId]: 171, [room.seats[1]!.playerId]: 1050 },
+      lastRoundResult: { roundNumber: 2, winnerId: room.seats[1]!.playerId, matchWinnerId: room.seats[1]!.playerId },
+    });
+    expect(room.command(0, { type: "start-next-round" })).toMatchObject({ ok: false, code: "match-complete" });
+  });
+
   test("stale and duplicate next-round commands never redeal, rotate or change scores", () => {
     const room = game(scoringHands);
     value(room.play(0, "red-discard-all"));

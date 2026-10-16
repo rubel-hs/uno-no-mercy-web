@@ -71,6 +71,43 @@ const scoringHands = [winningHand,
   ["green-draw-4", "green-1", "green-2", "green-3", "green-4", "green-8", "green-9"],
 ];
 
+function dealRandom(hands: string[][], top = "red-5", dealerIndex = hands.length - 1): () => number {
+  let id = 0;
+  const original = createDeck(() => `fixture-${++id}`);
+  const remaining = [...original];
+  const take = (faceId: string) => {
+    const index = remaining.findIndex((card) => card.faceId === faceId);
+    if (index < 0) throw new Error(`Fixture exhausted ${faceId}`);
+    return remaining.splice(index, 1)[0]!;
+  };
+  const desired: PhysicalCard[] = [];
+  for (let round = 0; round < 7; round++) for (let offset = 1; offset <= hands.length; offset++) {
+    desired.push(take(hands[(dealerIndex + offset) % hands.length]![round]!));
+  }
+  desired.push(take(top), ...remaining);
+  const shuffled = [...original];
+  const samples: number[] = [];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = shuffled.findIndex((card) => card.instanceId === desired[i]!.instanceId);
+    samples.push((j + 0.5) / (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
+  }
+  samples.push((dealerIndex + 0.5) / hands.length);
+  return () => samples.shift() ?? 0.999999;
+}
+
+function roundDeals(deals: { hands: string[][]; dealerIndex: number }[]): () => number {
+  const samples = deals.flatMap(({ hands, dealerIndex }, index) => {
+    const random = dealRandom(hands, "red-5", dealerIndex);
+    return Array.from({ length: index === 0 ? 168 : 167 }, random);
+  });
+  return () => {
+    const sample = samples.shift();
+    if (sample === undefined) throw new Error("Unexpected round/dealer random sample");
+    return sample;
+  };
+}
+
 // Arrange real canonical deals through injected shuffle samples, including dealer rotation.
 function matchFixture(hands = scoringHands) {
   let cards = 0;
@@ -119,6 +156,30 @@ function matchFixture(hands = scoringHands) {
   };
   const finish = () => command(0, { type: "play-card", cardId: snapshot(peers[0]!.transport).hand.find(({ faceId }) => faceId === "red-discard-all")!.instanceId });
   return { store, seats, peers, command, finish };
+}
+
+function multiRoundGatewayFixture(deals: { hands: string[][]; dealerIndex: number }[], names = ["Alice", "Bob", "Carol", "Dan"]) {
+  let cards = 0;
+  let tokens = 0;
+  const store = createRoomStore({
+    roomCodeFactory: () => "ABCDEF", tokenFactory: () => `match-secret-${++tokens}`,
+    cardIdFactory: () => `physical-${++cards}`, now: () => 1_000,
+    setTimeout: () => 0, clearTimeout: () => {},
+    random: roundDeals(deals),
+  });
+  const seats = [value(store.createRoom(names[0]!))];
+  for (let i = 1; i < names.length; i++) seats.push(value(store.joinRoom("ABCDEF", names[i]!)));
+  const peers = seats.map((seat, i) => {
+    const transport = peer(`match-peer-${i}`);
+    const session = createRealtimeSession(store, "ABCDEF", transport);
+    session.onMessage(JSON.stringify({ version: 1, type: "authenticate", token: seat.token }));
+    return { transport, session };
+  });
+  let commands = 0;
+  const command = (index: number, clientCommand: ClientCommand, commandId = `e2e-cmd-${++commands}`, revision = store.getRoom("ABCDEF")!.revision) => {
+    peers[index]!.session.onMessage(JSON.stringify({ version: 1, type: "command", commandId, revision, command: clientCommand }));
+  };
+  return { store, seats, peers, command };
 }
 
 describe("public match snapshots", () => {
@@ -221,6 +282,170 @@ describe("public match snapshots", () => {
       });
       expect(projected.allowedControls).toEqual(["leave-room"]);
     }
+  });
+});
+
+describe("end-to-end match protocol flow", () => {
+  test("creates a room, starts a round, completes deterministic fixtures, verifies identical public standings across peers, starts next round as host, rejects guest and stale retries, and reaches match-complete", () => {
+    const round1Hands = [
+      winningHand,
+      ["wild-draw-6", "blue-1", "blue-2", "blue-3", "blue-4", "blue-8", "blue-9"],
+      ["green-draw-4", "green-1", "green-2", "green-3", "green-4", "green-8", "green-9"],
+      ["yellow-draw-4", "yellow-1", "yellow-2", "yellow-3", "yellow-4", "yellow-8", "yellow-9"],
+    ];
+    const round2Hands = [
+      Array<string>(7).fill("wild-reverse-draw-4"),
+      winningHand,
+      Array<string>(7).fill("wild-color-roulette"),
+      ["wild-reverse-draw-4", "wild-color-roulette", "wild-draw-6", "wild-draw-6", "wild-draw-6", "wild-draw-6", "wild-draw-10"],
+    ];
+
+    const room = multiRoundGatewayFixture([
+      { hands: round1Hands, dealerIndex: 3 },
+      { hands: round2Hands, dealerIndex: 0 },
+    ]);
+
+    // 1. Verify initial lobby standings across peers
+    for (const { transport } of room.peers) {
+      expect(snapshot(transport)).toMatchObject({
+        matchStatus: "lobby",
+        roundNumber: 0,
+        targetScore: 1000,
+        scores: room.seats.map(({ playerId }) => ({ playerId, points: 0 })),
+        roundResult: null,
+        matchWinner: null,
+      });
+    }
+
+    // 2. Host starts the game
+    room.command(0, { type: "start-game" });
+    for (const { transport } of room.peers) {
+      expect(snapshot(transport)).toMatchObject({
+        matchStatus: "round-active",
+        roundNumber: 1,
+        targetScore: 1000,
+        scores: room.seats.map(({ playerId }) => ({ playerId, points: 0 })),
+        roundResult: null,
+        matchWinner: null,
+      });
+    }
+
+    // 3. Complete round 1 with deterministic winning play from Alice (seat 0)
+    const aliceCard = snapshot(room.peers[0]!.transport).hand.find(({ faceId }) => faceId === "red-discard-all")!;
+    room.command(0, { type: "play-card", cardId: aliceCard.instanceId });
+
+    // 4. Verify identical public standings across all peers
+    const winnerId = room.seats[0]!.playerId;
+    const expectedRound1Breakdown = [
+      { playerId: room.seats[0]!.playerId, cardPoints: 171, eliminationBonus: 0, roundPoints: 171, cumulativePoints: 171 },
+      { playerId: room.seats[1]!.playerId, cardPoints: 0, eliminationBonus: 0, roundPoints: 0, cumulativePoints: 0 },
+      { playerId: room.seats[2]!.playerId, cardPoints: 0, eliminationBonus: 0, roundPoints: 0, cumulativePoints: 0 },
+      { playerId: room.seats[3]!.playerId, cardPoints: 0, eliminationBonus: 0, roundPoints: 0, cumulativePoints: 0 },
+    ];
+    const expectedRound1Scores = [
+      { playerId: room.seats[0]!.playerId, points: 171 },
+      { playerId: room.seats[1]!.playerId, points: 0 },
+      { playerId: room.seats[2]!.playerId, points: 0 },
+      { playerId: room.seats[3]!.playerId, points: 0 },
+    ];
+
+    room.peers.forEach(({ transport }, index) => {
+      const snap = snapshot(transport);
+      expect(snap).toMatchObject({
+        matchStatus: "round-complete",
+        roundNumber: 1,
+        targetScore: 1000,
+        matchWinner: null,
+        scores: expectedRound1Scores,
+        roundResult: {
+          roundNumber: 1,
+          winnerId,
+          matchWinnerId: null,
+          breakdown: expectedRound1Breakdown,
+        },
+      });
+      if (index === 0) {
+        expect(snap.allowedControls).toContain("start-next-round");
+      } else {
+        expect(snap.allowedControls).not.toContain("start-next-round");
+      }
+    });
+
+    // 5. Guest attempts to start next round -> rejected with NOT_HOST
+    room.command(1, { type: "start-next-round" }, "guest-next-cmd");
+    rejected(room.peers[1]!.transport, "NOT_HOST", "guest-next-cmd");
+    expect(room.store.getRoom("ABCDEF")!.match.status).toBe("round-complete");
+
+    // 6. Host starts next round
+    const preRound2Revision = room.store.getRoom("ABCDEF")!.revision;
+    room.command(0, { type: "start-next-round" }, "host-next-cmd");
+    expect(room.store.getRoom("ABCDEF")!.revision).toBe(preRound2Revision + 1);
+
+    // Verify round 2 active state and rotated dealer
+    room.peers.forEach(({ transport }) => {
+      const snap = snapshot(transport);
+      expect(snap).toMatchObject({
+        matchStatus: "round-active",
+        roundNumber: 2,
+        targetScore: 1000,
+        matchWinner: null,
+        scores: expectedRound1Scores,
+        roundResult: {
+          roundNumber: 1,
+          winnerId,
+          matchWinnerId: null,
+        },
+      });
+      expect(snap.allowedControls).not.toContain("start-next-round");
+    });
+
+    // 7. Stale and duplicate retries of next round are rejected
+    // Active phase rejects command
+    room.command(0, { type: "start-next-round" }, "active-phase-next");
+    rejected(room.peers[0]!.transport, "round-not-complete", "active-phase-next");
+
+    // Duplicate command ID with older revision
+    room.command(0, { type: "start-next-round" }, "host-next-cmd", preRound2Revision);
+    rejected(room.peers[0]!.transport, "DUPLICATE_COMMAND", "host-next-cmd");
+
+    // Stale revision with new command ID
+    room.command(0, { type: "start-next-round" }, "stale-revision-next", preRound2Revision);
+    rejected(room.peers[0]!.transport, "STALE_REVISION", "stale-revision-next");
+
+    // 8. Bob (seat 1, current player) plays winning card for 1050 round points
+    const bobCard = snapshot(room.peers[1]!.transport).hand.find(({ faceId }) => faceId === "red-discard-all")!;
+    room.command(1, { type: "play-card", cardId: bobCard.instanceId });
+
+    // 9. Reaches match-complete
+    const matchWinnerId = room.seats[1]!.playerId;
+    const expectedFinalScores = [
+      { playerId: room.seats[0]!.playerId, points: 171 },
+      { playerId: room.seats[1]!.playerId, points: 1050 },
+      { playerId: room.seats[2]!.playerId, points: 0 },
+      { playerId: room.seats[3]!.playerId, points: 0 },
+    ];
+
+    room.peers.forEach(({ transport }) => {
+      const snap = snapshot(transport);
+      expect(snap).toMatchObject({
+        matchStatus: "match-complete",
+        roundNumber: 2,
+        targetScore: 1000,
+        matchWinner: matchWinnerId,
+        scores: expectedFinalScores,
+        roundResult: {
+          roundNumber: 2,
+          winnerId: matchWinnerId,
+          matchWinnerId,
+        },
+      });
+      expect(snap.allowedControls).not.toContain("start-next-round");
+      expect(snap.allowedControls).toEqual(["leave-room"]);
+    });
+
+    // 10. Calling next round when match is complete is rejected
+    room.command(0, { type: "start-next-round" }, "after-match-next");
+    rejected(room.peers[0]!.transport, "match-complete", "after-match-next");
   });
 });
 

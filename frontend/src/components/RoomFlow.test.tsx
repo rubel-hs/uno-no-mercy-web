@@ -429,6 +429,100 @@ describe("multiplayer room and lobby flow", () => {
       expect(sessionStorage.getItem(SESSION_STORAGE_KEY)).toBeNull();
     });
 
+    test("plays through a complete multi-round match to match completion and returns to home screen", async () => {
+      saveSession(credentialsFixture);
+      render(<App />);
+      await screen.findByText("ABCDEF");
+
+      // Round 1 active
+      act(() => mockSocket?.emitSnapshot(createLobbySnapshot({
+        phase: "playing",
+        matchStatus: "round-active",
+        roundNumber: 1,
+        players: [
+          { id: "host-id", name: "Alice", order: 0, cardCount: 7, online: true, eliminated: false },
+          { id: "guest-id", name: "Bob", order: 1, cardCount: 7, online: true, eliminated: false },
+        ],
+        currentPlayerId: "host-id",
+        scores: [{ playerId: "host-id", points: 0 }, { playerId: "guest-id", points: 0 }],
+      })));
+      expect(screen.getByRole("region", { name: "Alice, 0 points, current player" })).toBeInTheDocument();
+
+      // Round 1 completes
+      act(() => mockSocket?.emitSnapshot(createResultSnapshot({
+        revision: 10,
+        roundNumber: 1,
+        scores: [{ playerId: "host-id", points: 171 }, { playerId: "guest-id", points: 0 }],
+        roundResult: {
+          roundNumber: 1,
+          winnerId: "host-id",
+          breakdown: [
+            { playerId: "host-id", cardPoints: 171, eliminationBonus: 0, roundPoints: 171, cumulativePoints: 171 },
+            { playerId: "guest-id", cardPoints: 0, eliminationBonus: 0, roundPoints: 0, cumulativePoints: 0 },
+          ],
+          matchWinnerId: null,
+        },
+      })));
+      expect(screen.getByRole("heading", { name: "Round 1 complete" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Next Round" })).toBeInTheDocument();
+
+      // Host clicks Next Round
+      fireEvent.click(screen.getByRole("button", { name: "Next Round" }));
+      expect(mockSocket?.sentCommands).toEqual([{ type: "start-next-round" }]);
+
+      // Round 2 active
+      act(() => mockSocket?.emitSnapshot(createLobbySnapshot({
+        revision: 11,
+        phase: "playing",
+        matchStatus: "round-active",
+        roundNumber: 2,
+        players: [
+          { id: "host-id", name: "Alice", order: 0, cardCount: 7, online: true, eliminated: false },
+          { id: "guest-id", name: "Bob", order: 1, cardCount: 7, online: true, eliminated: false },
+        ],
+        currentPlayerId: "guest-id",
+        scores: [{ playerId: "host-id", points: 171 }, { playerId: "guest-id", points: 0 }],
+        roundResult: {
+          roundNumber: 1,
+          winnerId: "host-id",
+          breakdown: [
+            { playerId: "host-id", cardPoints: 171, eliminationBonus: 0, roundPoints: 171, cumulativePoints: 171 },
+            { playerId: "guest-id", cardPoints: 0, eliminationBonus: 0, roundPoints: 0, cumulativePoints: 0 },
+          ],
+          matchWinnerId: null,
+        },
+      })));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Bob, 0 points, current player" })).toBeInTheDocument();
+
+      // Round 2 completes and crosses target -> match-complete
+      act(() => mockSocket?.emitSnapshot(createResultSnapshot({
+        revision: 20,
+        roundNumber: 2,
+        matchStatus: "match-complete",
+        matchWinner: "guest-id",
+        scores: [{ playerId: "guest-id", points: 1050 }, { playerId: "host-id", points: 171 }],
+        roundResult: {
+          roundNumber: 2,
+          winnerId: "guest-id",
+          breakdown: [
+            { playerId: "guest-id", cardPoints: 1050, eliminationBonus: 0, roundPoints: 1050, cumulativePoints: 1050 },
+            { playerId: "host-id", cardPoints: 0, eliminationBonus: 0, roundPoints: 0, cumulativePoints: 171 },
+          ],
+          matchWinnerId: "guest-id",
+        },
+        allowedControls: ["leave-room"],
+      })));
+      expect(screen.getByRole("heading", { name: "Match winner: Bob" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Next Round" })).not.toBeInTheDocument();
+
+      // Return to Lobby
+      fireEvent.click(screen.getByRole("button", { name: "Return to Lobby" }));
+      expect(screen.getByRole("heading", { name: "Choose your table" })).toBeInTheDocument();
+      expect(mockSocket?.sentCommands).toContainEqual({ type: "leave-room" });
+      expect(sessionStorage.getItem(SESSION_STORAGE_KEY)).toBeNull();
+    });
+
     test("saved session automatically reconnects on mount", async () => {
       saveSession(credentialsFixture);
 
