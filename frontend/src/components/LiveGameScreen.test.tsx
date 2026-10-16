@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, it, test, vi } from "vitest";
 
 import type { PlayerSnapshot } from "../game/protocol";
 import { LiveGameScreen } from "./LiveGameScreen";
@@ -994,6 +994,132 @@ describe("LiveGameScreen", () => {
       // Card 3: matching red 9 auto-thrown to discard
       fireEvent.click(drawButton);
       expect(within(discardPile).getByRole("article", { name: /red 9/i })).toBeInTheDocument();
+    });
+  });
+
+  describe("mobile responsive portrait layout", () => {
+    it("renders all three key board zones (opponents, center table, player hand)", () => {
+      const sampleSnapshot = createGameSnapshot();
+      render(
+        <LiveGameScreen
+          onCommand={vi.fn()}
+          onLeaveRoom={vi.fn()}
+          snapshot={sampleSnapshot}
+        />,
+      );
+      expect(document.querySelector(".opponents-strip")).toBeInTheDocument();
+      expect(document.querySelector(".table-center")).toBeInTheDocument();
+      expect(document.querySelector(".player-seat--bottom")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Declare UNO" })).toBeInTheDocument();
+    });
+
+    it("handles 5 opponents inside opponents-strip without error", () => {
+      const sampleSnapshot = createGameSnapshot();
+      const fiveOpponentSnapshot = {
+        ...sampleSnapshot,
+        viewerId: "viewer",
+        players: [
+          { id: "viewer", name: "You", order: 0, online: true, eliminated: false, cardCount: 7 },
+          { id: "p1", name: "Alice", order: 1, online: true, eliminated: false, cardCount: 4 },
+          { id: "p2", name: "Bob", order: 2, online: true, eliminated: false, cardCount: 5 },
+          { id: "p3", name: "Charlie", order: 3, online: true, eliminated: false, cardCount: 6 },
+          { id: "p4", name: "Dave", order: 4, online: true, eliminated: false, cardCount: 2 },
+          { id: "p5", name: "Eve", order: 5, online: true, eliminated: false, cardCount: 9 },
+        ],
+      };
+      render(
+        <LiveGameScreen
+          onCommand={vi.fn()}
+          onLeaveRoom={vi.fn()}
+          snapshot={fiveOpponentSnapshot}
+        />,
+      );
+      const opponentStrip = document.querySelector(".opponents-strip");
+      expect(opponentStrip).toBeInTheDocument();
+      expect(opponentStrip?.querySelectorAll(".player-seat").length).toBe(5);
+    });
+
+    it("applies display: contents to opponents-strip as desktop default", () => {
+      const allRules = Array.from(document.styleSheets).flatMap((sheet) => {
+        try {
+          return Array.from(sheet.cssRules);
+        } catch {
+          return [];
+        }
+      });
+      const stripRule = allRules.find(
+        (rule) =>
+          rule instanceof CSSStyleRule &&
+          rule.selectorText === ".opponents-strip",
+      ) as CSSStyleRule | undefined;
+
+      expect(stripRule?.style.display).toBe("contents");
+    });
+
+    it("renders opponent card count badge inside opponent seat", () => {
+      render(
+        <LiveGameScreen
+          onCommand={vi.fn()}
+          onLeaveRoom={vi.fn()}
+          snapshot={createGameSnapshot()}
+        />,
+      );
+      const opponentStrip = document.querySelector(".opponents-strip");
+      const cardCountBadge = opponentStrip?.querySelector(".player-seat__card-count");
+      expect(cardCountBadge).toBeInTheDocument();
+      expect(cardCountBadge?.querySelector(".player-seat__card-count-icon")).toBeInTheDocument();
+    });
+
+    it("defines styling for player-seat__card-count", () => {
+      const allRules = Array.from(document.styleSheets).flatMap((sheet) => {
+        try {
+          return Array.from(sheet.cssRules);
+        } catch {
+          return [];
+        }
+      });
+      const cardCountRule = allRules.find(
+        (rule) =>
+          rule instanceof CSSStyleRule &&
+          rule.selectorText === ".player-seat__card-count",
+      ) as CSSStyleRule | undefined;
+
+      expect(cardCountRule?.style.display).toBe("inline-flex");
+    });
+
+    it("constrains player-seat--bottom hand with max-width min(100%, 100vw)", () => {
+      const allRules = Array.from(document.styleSheets).flatMap((sheet) => {
+        try {
+          return Array.from(sheet.cssRules);
+        } catch {
+          return [];
+        }
+      });
+      const handRule = allRules.find(
+        (rule) =>
+          rule instanceof CSSStyleRule &&
+          rule.selectorText === ".player-seat--bottom .player-seat__hand",
+      ) as CSSStyleRule | undefined;
+
+      expect(handRule?.style.maxWidth).toBe("min(100%, 100vw)");
+    });
+
+    it("defines portrait media query rules for mobile responsive game table", () => {
+      const allRules = Array.from(document.styleSheets).flatMap((sheet) => {
+        try {
+          return Array.from(sheet.cssRules);
+        } catch {
+          return [];
+        }
+      });
+      const mediaRule = allRules.find(
+        (rule) =>
+          rule instanceof CSSMediaRule &&
+          rule.conditionText.includes("max-width: 768px") &&
+          rule.conditionText.includes("orientation: portrait"),
+      ) as CSSMediaRule | undefined;
+
+      expect(mediaRule).toBeDefined();
     });
   });
 });
