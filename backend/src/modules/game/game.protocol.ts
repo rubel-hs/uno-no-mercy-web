@@ -101,13 +101,13 @@ export interface PlayerSnapshot {
   winner: string | null;
   legalCardIds: string[];
   allowedControls: ClientCommand["type"][];
-  /** Public match metadata, never private room data. Optional until room projection populates match state. */
-  matchStatus?: MatchStatus;
-  roundNumber?: number;
-  targetScore?: 1000;
-  scores?: PlayerScore[];
-  roundResult?: RoundResult | null;
-  matchWinner?: string | null;
+  /** Public match metadata, never private room data. */
+  matchStatus: MatchStatus;
+  roundNumber: number;
+  targetScore: 1000;
+  scores: PlayerScore[];
+  roundResult: RoundResult | null;
+  matchWinner: string | null;
 }
 
 export type ServerMessage =

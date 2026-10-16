@@ -138,9 +138,15 @@ export function createRoomStore(overrides: Partial<RoomStoreDeps> = {}): RoomSto
   }
 
   function snapshot(room: Room, viewerId: string): PlayerSnapshot {
-    if (room.game) return { ...projectPlayerSnapshot(gameWithMetadata(room), viewerId), roomCode: room.code, hostPlayerId: room.hostPlayerId };
+    if (room.game) {
+      const projected = projectPlayerSnapshot(gameWithMetadata(room), viewerId, room.match);
+      if (viewerId === room.hostPlayerId && room.match.status === "round-complete") projected.allowedControls.push("start-next-round");
+      return { ...projected, roomCode: room.code, hostPlayerId: room.hostPlayerId };
+    }
     return {
       roomCode: room.code, hostPlayerId: room.hostPlayerId, viewerId, revision: room.revision, phase: "lobby",
+      matchStatus: "lobby", roundNumber: 0, targetScore: 1000,
+      scores: [...room.seats.values()].map((seat) => ({ playerId: seat.id, points: 0 })), roundResult: null, matchWinner: null,
       players: [...room.seats.values()].map((seat, order) => ({
         id: seat.id, name: seat.name, order, cardCount: 0, online: Boolean(seat.peer), eliminated: false,
       })),

@@ -1,8 +1,9 @@
 import { getPlayableCardIds } from "./game.engine";
 import type { ClientCommand, PlayerSnapshot } from "./game.protocol";
 import type { GameState } from "./game.types";
+import type { MatchState } from "../rooms/room.types";
 
-export function projectPlayerSnapshot(state: GameState, viewerId: string): PlayerSnapshot {
+export function projectPlayerSnapshot(state: GameState, viewerId: string, match: MatchState): PlayerSnapshot {
   const viewer = state.players.find(({ id }) => id === viewerId);
   const activeViewer = viewer && !viewer.eliminated && state.phase !== "finished";
   const legalCardIds = activeViewer && state.phase === "playing" && state.pendingChoice === null && state.currentPlayerId === viewerId
@@ -50,5 +51,18 @@ export function projectPlayerSnapshot(state: GameState, viewerId: string): Playe
     winner: state.winner,
     legalCardIds,
     allowedControls,
+    matchStatus: match.status,
+    roundNumber: match.roundNumber,
+    targetScore: match.targetScore,
+    scores: Object.entries(match.scoresByPlayerId).map(([playerId, points]) => ({ playerId, points })),
+    roundResult: match.lastRoundResult ? {
+      roundNumber: match.lastRoundResult.roundNumber,
+      winnerId: match.lastRoundResult.winnerId,
+      matchWinnerId: match.lastRoundResult.matchWinnerId,
+      breakdown: match.lastRoundResult.breakdown.map(({ playerId, cardPoints, eliminationBonus, roundPoints, cumulativePoints }) => ({
+        playerId, cardPoints, eliminationBonus, roundPoints, cumulativePoints,
+      })),
+    } : null,
+    matchWinner: match.winner,
   };
 }

@@ -1,7 +1,9 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import type { BunWebSocketData } from "hono/bun";
 import { createApp } from "../../app";
+import { createDeck } from "../game/deck";
 import type { ClientCommand, ClientEnvelope, PlayerSnapshot, ServerMessage } from "../game/game.protocol";
+import type { PhysicalCard } from "../game/game.types";
 import { createRoomStore } from "../rooms/room.store";
 import type { RoomPeer, RoomResult, RoomStore } from "../rooms/room.types";
 import { createRealtimeSession } from "./realtime.gateway";
@@ -62,6 +64,150 @@ function rejected(transport: ReturnType<typeof peer>, code: string, commandId?: 
   else expect(message).toHaveProperty("commandId", commandId);
   return message;
 }
+
+const winningHand = ["red-discard-all", "red-1", "red-2", "red-3", "red-4", "red-8", "red-9"];
+const scoringHands = [winningHand,
+  ["wild-draw-6", "blue-1", "blue-2", "blue-3", "blue-4", "blue-8", "blue-9"],
+  ["green-draw-4", "green-1", "green-2", "green-3", "green-4", "green-8", "green-9"],
+];
+
+// Arrange real canonical deals through injected shuffle samples, including dealer rotation.
+function matchFixture(hands = scoringHands) {
+  let cards = 0;
+  let tokens = 0;
+  const samples: number[] = [];
+  for (const dealer of [hands.length - 1, 0]) {
+    let id = 0;
+    const original = createDeck(() => `fixture-${++id}`);
+    const remaining = [...original];
+    const take = (faceId: string) => {
+      const index = remaining.findIndex((card) => card.faceId === faceId);
+      if (index < 0) throw new Error(`Fixture exhausted ${faceId}`);
+      return remaining.splice(index, 1)[0]!;
+    };
+    const desired: PhysicalCard[] = [];
+    for (let round = 0; round < 7; round++) for (let offset = 1; offset <= hands.length; offset++) {
+      desired.push(take(hands[(dealer + offset) % hands.length]![round]!));
+    }
+    desired.push(take("red-5"), ...remaining);
+    const shuffled = [...original];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = shuffled.findIndex((card) => card.instanceId === desired[i]!.instanceId);
+      samples.push((j + 0.5) / (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
+    }
+    if (dealer === hands.length - 1) samples.push((dealer + 0.5) / hands.length);
+  }
+  const store = createRoomStore({
+    roomCodeFactory: () => "ABCDEF", tokenFactory: () => `match-secret-${++tokens}`,
+    cardIdFactory: () => `physical-${++cards}`, now: () => 1_000,
+    setTimeout: () => 0, clearTimeout: () => {},
+    random: () => { const sample = samples.shift(); if (sample === undefined) throw new Error("Unexpected shuffle"); return sample; },
+  });
+  const seats = [value(store.createRoom("Alice"))];
+  for (let i = 1; i < hands.length; i++) seats.push(value(store.joinRoom("ABCDEF", ["Bob", "Carol", "Dan"][i - 1]!)));
+  const peers = seats.map((seat, i) => {
+    const transport = peer(`match-peer-${i}`);
+    const session = createRealtimeSession(store, "ABCDEF", transport);
+    session.onMessage(JSON.stringify({ version: 1, type: "authenticate", token: seat.token }));
+    return { transport, session };
+  });
+  let commands = 0;
+  const command = (index: number, command: ClientCommand) => {
+    peers[index]!.session.onMessage(JSON.stringify({ version: 1, type: "command", commandId: `match-command-${++commands}`, revision: store.getRoom("ABCDEF")!.revision, command }));
+    expect(peers[index]!.transport.messages.at(-1)?.type).not.toBe("rejection");
+  };
+  const finish = () => command(0, { type: "play-card", cardId: snapshot(peers[0]!.transport).hand.find(({ faceId }) => faceId === "red-discard-all")!.instanceId });
+  return { store, seats, peers, command, finish };
+}
+
+describe("public match snapshots", () => {
+  // Catches omitting match defaults from either initial authentication or lobby broadcasts.
+  test.each([1, 2])("publishes zeroed lobby metadata for %i seats", (count) => {
+    const room = fixture();
+    const seats = [room.host];
+    if (count === 2) seats.push(value(room.store.joinRoom("ABCDEF", "Bob")));
+    room.authenticate();
+    const before = room.store.getRoom("ABCDEF")!;
+    expect(snapshot(room.transport)).toMatchObject({
+      matchStatus: "lobby", roundNumber: 0, targetScore: 1000,
+      scores: seats.map(({ playerId }) => ({ playerId, points: 0 })), roundResult: null, matchWinner: null,
+    });
+    expect(snapshot(room.transport).allowedControls).not.toContain("start-next-round");
+    expect(room.store.getRoom("ABCDEF")).toEqual(before);
+  });
+
+  test("broadcasts identical completed-round breakdowns with host-only next-round control", () => {
+    const room = matchFixture();
+    room.command(0, { type: "start-game" });
+    const before = room.store.getRoom("ABCDEF")!.revision;
+    room.finish();
+    const winnerId = room.seats[0]!.playerId;
+    const breakdown = room.seats.map(({ playerId }, i) => ({ playerId, cardPoints: i === 0 ? 124 : 0, eliminationBonus: 0, roundPoints: i === 0 ? 124 : 0, cumulativePoints: i === 0 ? 124 : 0 }));
+    room.peers.forEach(({ transport }, i) => {
+      expect(transport.messages.at(-1)).toMatchObject({ version: 1, type: "snapshot", snapshot: {
+        matchStatus: "round-complete", roundNumber: 1, targetScore: 1000, revision: before + 1,
+        scores: room.seats.map(({ playerId }, j) => ({ playerId, points: j === 0 ? 124 : 0 })),
+        roundResult: { roundNumber: 1, winnerId, matchWinnerId: null, breakdown }, matchWinner: null,
+      } });
+      expect(snapshot(transport).allowedControls).toEqual(i === 0 ? ["leave-room", "start-next-round"] : ["leave-room"]);
+    });
+  });
+
+  // Catches losing prior results/scores on a new deal or leaking hidden identities through match data.
+  test("carries active scores and prior results to all viewers while keeping hands private", () => {
+    const room = matchFixture();
+    room.command(0, { type: "start-game" });
+    for (const { transport } of room.peers) expect(snapshot(transport)).toMatchObject({ matchStatus: "round-active", roundNumber: 1, roundResult: null, matchWinner: null });
+    room.finish();
+    room.command(0, { type: "start-next-round" });
+    const state = room.store.getRoom("ABCDEF")!.game!;
+    room.peers.forEach(({ transport }, i) => {
+      const projected = snapshot(transport);
+      expect(projected).toMatchObject({
+        matchStatus: "round-active", roundNumber: 2, targetScore: 1000, matchWinner: null,
+        scores: room.seats.map(({ playerId }, j) => ({ playerId, points: j === 0 ? 124 : 0 })),
+        roundResult: { roundNumber: 1, winnerId: room.seats[0]!.playerId, matchWinnerId: null },
+      });
+      expect(projected.hand).toEqual(state.players[i]!.hand);
+      expect(projected.allowedControls).not.toContain("start-next-round");
+      expect(projected.players.map(({ cardCount }) => cardCount)).toEqual([7, 7, 7]);
+      const json = JSON.stringify(projected);
+      const hidden = [...state.drawPile, ...state.discardPile, ...state.players.filter((_, j) => i !== j).flatMap(({ hand }) => hand)];
+      for (const card of hidden) expect(json).not.toContain(`"${card.instanceId}"`);
+      for (const seat of room.seats) expect(json).not.toContain(seat.token);
+      for (const key of ["drawPile", "reconnectDeadline", "timer", "scoresByPlayerId", "finalizedRoundNumber", "dealerIndex"]) expect(json).not.toContain(`"${key}"`);
+    });
+  });
+
+  test("transfers next-round control to the new host and retains departed historical scores", () => {
+    const room = matchFixture();
+    room.command(0, { type: "start-game" });
+    room.finish();
+    room.command(0, { type: "leave-room" });
+    expect(snapshot(room.peers[1]!.transport)).toMatchObject({ hostPlayerId: room.seats[1]!.playerId, matchStatus: "round-complete" });
+    expect(snapshot(room.peers[1]!.transport).allowedControls).toContain("start-next-round");
+    expect(snapshot(room.peers[2]!.transport).allowedControls).not.toContain("start-next-round");
+    expect(snapshot(room.peers[1]!.transport).scores).toContainEqual({ playerId: room.seats[0]!.playerId, points: 124 });
+  });
+
+  test("publishes final match winner and standings to every viewer without next-round control", () => {
+    const hands = [winningHand, Array<string>(7).fill("wild-reverse-draw-4"), Array<string>(7).fill("wild-color-roulette"),
+      ["wild-reverse-draw-4", "wild-color-roulette", "wild-draw-6", "wild-draw-6", "wild-draw-6", "wild-draw-6", "wild-draw-10"]];
+    const room = matchFixture(hands);
+    room.command(0, { type: "start-game" });
+    room.finish();
+    for (const { transport } of room.peers) {
+      const projected = snapshot(transport);
+      expect(projected).toMatchObject({
+        matchStatus: "match-complete", roundNumber: 1, targetScore: 1000, matchWinner: room.seats[0]!.playerId,
+        scores: room.seats.map(({ playerId }, i) => ({ playerId, points: i === 0 ? 1050 : 0 })),
+        roundResult: { roundNumber: 1, winnerId: room.seats[0]!.playerId, matchWinnerId: room.seats[0]!.playerId },
+      });
+      expect(projected.allowedControls).toEqual(["leave-room"]);
+    }
+  });
+});
 
 describe("realtime authentication", () => {
   // Break caught: auth trusts a client identity, skips binding, or invents a public snapshot.

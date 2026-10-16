@@ -3,6 +3,24 @@ import { applyGameCommand } from "./game.engine";
 import { parseClientMessage, type ClientCommand } from "./game.protocol";
 import { projectPlayerSnapshot } from "./game.projector";
 import type { GameState } from "./game.types";
+import type { MatchState } from "../rooms/room.types";
+
+function matchFixture(): MatchState {
+  return {
+    status: "round-active", roundNumber: 2, targetScore: 1000,
+    scoresByPlayerId: { a: 124, b: 250, c: 0, departed: 50 },
+    lastRoundResult: {
+      roundNumber: 1, winnerId: "a", matchWinnerId: null,
+      breakdown: [
+        { playerId: "a", cardPoints: 124, eliminationBonus: 0, roundPoints: 124, cumulativePoints: 124 },
+        { playerId: "b", cardPoints: 0, eliminationBonus: 250, roundPoints: 250, cumulativePoints: 250 },
+        { playerId: "c", cardPoints: 0, eliminationBonus: 0, roundPoints: 0, cumulativePoints: 0 },
+        { playerId: "departed", cardPoints: 0, eliminationBonus: 0, roundPoints: 0, cumulativePoints: 50 },
+      ],
+    },
+    winner: null, finalizedRoundNumber: 1, dealerIndex: 0,
+  };
+}
 
 function fixture(): GameState {
   return {
@@ -23,6 +41,69 @@ function envelope(command: unknown = { type: "draw-until-playable" }): Record<st
 }
 
 describe("private snapshots", () => {
+  // Catches missing match metadata, dropping departed scores, or personalizing public standings.
+  test("projects equal active standings and the prior round result for every viewer", () => {
+    const state = fixture();
+    const match = matchFixture();
+    for (const viewerId of ["a", "b", "c"]) {
+      const snapshot = projectPlayerSnapshot(state, viewerId, match);
+      expect(snapshot).toMatchObject({
+        matchStatus: "round-active", roundNumber: 2, targetScore: 1000,
+        scores: [{ playerId: "a", points: 124 }, { playerId: "b", points: 250 }, { playerId: "c", points: 0 }, { playerId: "departed", points: 50 }],
+        roundResult: { roundNumber: 1, winnerId: "a", matchWinnerId: null, breakdown: [
+          { playerId: "a", cardPoints: 124, eliminationBonus: 0, roundPoints: 124, cumulativePoints: 124 },
+          { playerId: "b", cardPoints: 0, eliminationBonus: 250, roundPoints: 250, cumulativePoints: 250 },
+          { playerId: "c", cardPoints: 0, eliminationBonus: 0, roundPoints: 0, cumulativePoints: 0 },
+          { playerId: "departed", cardPoints: 0, eliminationBonus: 0, roundPoints: 0, cumulativePoints: 50 },
+        ] },
+        matchWinner: null,
+      });
+      expect(snapshot.allowedControls).not.toContain("start-next-round");
+    }
+    match.lastRoundResult = null;
+    expect(projectPlayerSnapshot(state, "a", match).roundResult).toBeNull();
+  });
+
+  // Catches spreading match/result/breakdown internals or returning mutable authoritative values.
+  test("allowlists and detaches nested match data without exposing opponents or bookkeeping", () => {
+    const state = fixture();
+    const match = matchFixture();
+    Object.assign(match, { token: "match-token", timers: ["match-timer"] });
+    Object.assign(match.lastRoundResult!, { hand: state.players[1]!.hand, drawPile: state.drawPile });
+    Object.assign(match.lastRoundResult!.breakdown[0]!, { token: "breakdown-token", hand: state.players[1]!.hand });
+    const before = structuredClone(match);
+    const snapshot = projectPlayerSnapshot(state, "a", match);
+    expect(snapshot.roundResult?.breakdown[0]).toEqual({ playerId: "a", cardPoints: 124, eliminationBonus: 0, roundPoints: 124, cumulativePoints: 124 });
+    const json = JSON.stringify(snapshot);
+    for (const secret of ["opponent-secret", "yellow-9", "draw-secret", "green-8", "buried-secret", "match-token", "match-timer", "breakdown-token", "scoresByPlayerId", "finalizedRoundNumber", "dealerIndex", "lastRoundResult"]) expect(json).not.toContain(secret);
+    expect(match).toEqual(before);
+    snapshot.scores[0]!.points = 999;
+    snapshot.roundResult!.breakdown[0]!.cumulativePoints = 999;
+    snapshot.roundResult!.winnerId = "b";
+    expect(match).toEqual(before);
+  });
+
+  test.each(["round-complete", "match-complete"] as const)("projects %s results and final winner without gameplay controls", (status) => {
+    const state = fixture();
+    state.phase = "finished";
+    state.winner = "a";
+    const match = matchFixture();
+    match.status = status;
+    match.roundNumber = 1;
+    const winner = status === "match-complete" ? "b" : null;
+    match.winner = winner;
+    match.lastRoundResult!.matchWinnerId = winner;
+    if (winner) {
+      match.scoresByPlayerId.b = 1000;
+      match.lastRoundResult!.breakdown[1]!.cumulativePoints = 1000;
+    }
+    const snapshot = projectPlayerSnapshot(state, "a", match);
+    expect(snapshot).toMatchObject({ matchStatus: status, roundNumber: 1, targetScore: 1000, winner: "a", matchWinner: winner, roundResult: { winnerId: "a", matchWinnerId: winner } });
+    expect(snapshot.scores).toContainEqual({ playerId: "b", points: winner ? 1000 : 250 });
+    expect(snapshot.allowedControls).toEqual(["leave-room"]);
+    expect(snapshot.legalCardIds).toEqual([]);
+  });
+
   // Catches spreading authoritative objects, including nested values, into public JSON.
   test("projects own physical cards and only public player summaries after serialization", () => {
     const state = fixture();
@@ -30,7 +111,7 @@ describe("private snapshots", () => {
     Object.assign(state.players[1]!, { token: "opponent-token", deadline: "deadline-secret" });
     Object.assign(state.players[0]!.hand[0]!, { secret: "card-secret" });
     const before = structuredClone(state);
-    const snapshot = projectPlayerSnapshot(state, "a");
+    const snapshot = projectPlayerSnapshot(state, "a", matchFixture());
     const json = JSON.stringify(snapshot);
     expect(JSON.parse(json).hand).toEqual([{ instanceId: "own-red", faceId: "red-3" }, { instanceId: "own-blue", faceId: "blue-2" }]);
     expect(snapshot.players).toEqual([
@@ -50,8 +131,8 @@ describe("private snapshots", () => {
     const state = fixture();
     delete state.players[0]!.name;
     delete state.players[0]!.online;
-    expect(projectPlayerSnapshot(state, "a").players[0]).toMatchObject({ name: "a", online: true });
-    const snapshot = projectPlayerSnapshot(state, "missing");
+    expect(projectPlayerSnapshot(state, "a", matchFixture()).players[0]).toMatchObject({ name: "a", online: true });
+    const snapshot = projectPlayerSnapshot(state, "missing", matchFixture());
     expect(snapshot.hand).toEqual([]);
     expect(snapshot.legalCardIds).toEqual([]);
     expect(snapshot.allowedControls).toEqual([]);
@@ -60,16 +141,16 @@ describe("private snapshots", () => {
   // Catches matching-card affordances being granted out of turn or during mandatory choices.
   test("limits legal cards and normal controls to the active eligible viewer", () => {
     const state = fixture();
-    expect(projectPlayerSnapshot(state, "a").legalCardIds).toEqual(["own-red"]);
-    expect(projectPlayerSnapshot(state, "a").allowedControls).toEqual(["play-card", "draw-and-pass", "leave-room"]);
+    expect(projectPlayerSnapshot(state, "a", matchFixture()).legalCardIds).toEqual(["own-red"]);
+    expect(projectPlayerSnapshot(state, "a", matchFixture()).allowedControls).toEqual(["play-card", "draw-and-pass", "leave-room"]);
     state.activeColor = "yellow";
-    expect(projectPlayerSnapshot(state, "b").legalCardIds).toEqual([]);
-    expect(projectPlayerSnapshot(state, "b").allowedControls).toEqual(["leave-room"]);
+    expect(projectPlayerSnapshot(state, "b", matchFixture()).legalCardIds).toEqual([]);
+    expect(projectPlayerSnapshot(state, "b", matchFixture()).allowedControls).toEqual(["leave-room"]);
     state.activeColor = "green";
-    expect(projectPlayerSnapshot(state, "a").allowedControls).toEqual(["draw-until-playable", "leave-room"]);
+    expect(projectPlayerSnapshot(state, "a", matchFixture()).allowedControls).toEqual(["draw-until-playable", "leave-room"]);
     state.pendingChoice = { type: "resolve-action", playerId: "a", cardId: "unsafe-action-secret" };
     state.phase = "pending-effect";
-    const pending = projectPlayerSnapshot(state, "a");
+    const pending = projectPlayerSnapshot(state, "a", matchFixture());
     expect(pending.legalCardIds).toEqual([]);
     expect(pending.allowedControls).toEqual(["leave-room"]);
     expect(pending.pendingChoice).toBeNull();
@@ -82,7 +163,7 @@ describe("private snapshots", () => {
     state.drawStack = { amount: 10, minimumDrawValue: 4 };
     state.players[0]!.hand.push({ instanceId: "stack", faceId: "wild-draw-6" });
     Object.assign(state.drawStack, { secret: "stack-secret" });
-    const snapshot = projectPlayerSnapshot(state, "a");
+    const snapshot = projectPlayerSnapshot(state, "a", matchFixture());
     expect(snapshot.drawStack).toEqual({ amount: 10, minimumDrawValue: 4 });
     expect(snapshot.legalCardIds).toEqual(["stack"]);
     expect(snapshot.allowedControls).toEqual(["play-card", "accept-draw", "leave-room"]);
@@ -94,12 +175,12 @@ describe("private snapshots", () => {
     state.phase = "awaiting-choice";
     state.pendingChoice = { type, playerId: "a" };
     Object.assign(state.pendingChoice!, { cardId: "pending-secret", token: "pending-token" });
-    const snapshot = projectPlayerSnapshot(state, "a");
+    const snapshot = projectPlayerSnapshot(state, "a", matchFixture());
     expect(snapshot.pendingChoice).toEqual({ type, playerId: "a" });
     expect(snapshot.allowedControls).toEqual([type, "leave-room"]);
     expect(snapshot.legalCardIds).toEqual([]);
-    expect(projectPlayerSnapshot(state, "b").allowedControls).toEqual(["leave-room"]);
-    expect(projectPlayerSnapshot(state, "c").allowedControls).toEqual(["leave-room"]);
+    expect(projectPlayerSnapshot(state, "b", matchFixture()).allowedControls).toEqual(["leave-room"]);
+    expect(projectPlayerSnapshot(state, "c", matchFixture()).allowedControls).toEqual(["leave-room"]);
     expect(JSON.stringify(snapshot)).not.toContain("pending-secret");
     expect(JSON.stringify(snapshot)).not.toContain("pending-token");
   });
@@ -108,29 +189,29 @@ describe("private snapshots", () => {
   test("projects live UNO controls and strips private expiry bookkeeping", () => {
     const state = fixture();
     state.unoWindow = { playerId: "b", declared: false, expiresAtGameplaySequence: 3 };
-    expect(projectPlayerSnapshot(state, "b").allowedControls).toEqual(["declare-uno", "leave-room"]);
-    const snapshot = projectPlayerSnapshot(state, "a");
+    expect(projectPlayerSnapshot(state, "b", matchFixture()).allowedControls).toEqual(["declare-uno", "leave-room"]);
+    const snapshot = projectPlayerSnapshot(state, "a", matchFixture());
     expect(snapshot.unoWindow).toEqual({ playerId: "b", declared: false });
     expect(snapshot.allowedControls).toContain("catch-uno");
     expect(JSON.stringify(snapshot)).not.toContain("expiresAtGameplaySequence");
     state.unoWindow.declared = true;
-    expect(projectPlayerSnapshot(state, "a").allowedControls).not.toContain("catch-uno");
+    expect(projectPlayerSnapshot(state, "a", matchFixture()).allowedControls).not.toContain("catch-uno");
     state.unoWindow.declared = false;
     state.gameplaySequence = 3;
-    expect(projectPlayerSnapshot(state, "b").allowedControls).not.toContain("declare-uno");
-    expect(projectPlayerSnapshot(state, "a").unoWindow).toBeNull();
+    expect(projectPlayerSnapshot(state, "b", matchFixture()).allowedControls).not.toContain("declare-uno");
+    expect(projectPlayerSnapshot(state, "a", matchFixture()).unoWindow).toBeNull();
   });
 
   // Catches terminal or eliminated players receiving turn or UNO actions.
   test("finished games and eliminated viewers have no gameplay controls", () => {
     const state = fixture();
     state.players[0]!.eliminated = true;
-    expect(projectPlayerSnapshot(state, "a").legalCardIds).toEqual([]);
-    expect(projectPlayerSnapshot(state, "a").allowedControls).toEqual(["leave-room"]);
+    expect(projectPlayerSnapshot(state, "a", matchFixture()).legalCardIds).toEqual([]);
+    expect(projectPlayerSnapshot(state, "a", matchFixture()).allowedControls).toEqual(["leave-room"]);
     state.phase = "finished";
     state.winner = "b";
-    expect(projectPlayerSnapshot(state, "b").allowedControls).toEqual(["leave-room"]);
-    expect(projectPlayerSnapshot(state, "b").winner).toBe("b");
+    expect(projectPlayerSnapshot(state, "b", matchFixture()).allowedControls).toEqual(["leave-room"]);
+    expect(projectPlayerSnapshot(state, "b", matchFixture()).winner).toBe("b");
   });
 
   // Catches projector controls disagreeing with a real engine transition.
@@ -138,7 +219,7 @@ describe("private snapshots", () => {
     const state = fixture();
     const result = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "own-red" });
     expect(result.ok).toBe(true);
-    const snapshot = projectPlayerSnapshot(result.state, "b");
+    const snapshot = projectPlayerSnapshot(result.state, "b", matchFixture());
     expect(snapshot.currentPlayerId).toBe("b");
     expect(snapshot.revision).toBe(5);
     expect(snapshot.allowedControls).toContain("draw-until-playable");
