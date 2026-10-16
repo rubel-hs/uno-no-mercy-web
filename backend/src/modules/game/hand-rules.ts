@@ -1,9 +1,12 @@
 import type { GameState } from "./game.types";
 import { getNextEligiblePlayerId } from "./turn-order";
 
-export function applyMercyRule(state: GameState): GameState {
+/** Attribute newly eliminated hands only when resolving a gameplay action. */
+export function applyMercyRule(state: GameState, actingPlayerId: string | null = null): GameState {
   return { ...state, players: state.players.map((player) =>
-    player.eliminated || player.hand.length >= 25 ? { ...player, eliminated: true, hand: [] } : player,
+    player.eliminated ? { ...player, hand: [] } : player.hand.length >= 25
+      ? { ...player, eliminated: true, hand: [], eliminatedByPlayerId: actingPlayerId }
+      : player,
   ) };
 }
 

@@ -130,8 +130,8 @@ describe("normal turns", () => {
     expect(state).toEqual(before);
   });
 
-  test("draws one card and passes when the player chooses not to play", () => {
-    const state = fixture({ drawPile: [card("drawn", "blue-8"), card("later", "green-9")] });
+  test("draws one playable card without playing it and passes", () => {
+    const state = fixture({ drawPile: [card("drawn", "red-skip"), card("later", "green-9")] });
     const before = structuredClone(state);
     const result = applyGameCommand(state, { type: "draw-and-pass", playerId: "a" });
 
@@ -175,6 +175,47 @@ describe("normal turns", () => {
     expect(result.state.pendingChoice).toEqual(faceId === "red-skip" ? null : { type: "choose-color", playerId: "a" });
     expect(result.state.currentPlayerId).toBe(faceId === "red-skip" ? "c" : "a");
     expect(result.state.revision).toBe(1);
+  });
+
+  // Catches bypassing action effects or UNO after multiple unsuccessful draws.
+  test("multiple draws immediately resolve the first playable action", () => {
+    const state = drawFixture({ drawPile: [
+      card("miss-1", "blue-2"), card("miss-2", "yellow-4"),
+      card("action", "red-draw-2"), card("later", "red-9"),
+    ] });
+    const result = applyGameCommand(state, { type: "draw-until-playable", playerId: "a" });
+    expect(result.ok).toBe(true);
+    expect(handOf(result.state, "a")).toEqual(["bad", "miss-1", "miss-2"]);
+    expect(result.state.discardPile.at(-1)?.instanceId).toBe("action");
+    expect(result.state.drawPile).toEqual([card("later", "red-9")]);
+    expect(result.state).toMatchObject({ currentPlayerId: "b", drawStack: { amount: 2, minimumDrawValue: 2 } });
+    if (result.ok) expect(result.events).toEqual([
+      { type: "cards-drawn", playerId: "a", cardIds: ["miss-1", "miss-2", "action"] },
+      { type: "card-played", playerId: "a", cardId: "action" },
+      { type: "turn-changed", playerId: "b" },
+    ]);
+  });
+
+  test("drawn wild opens UNO and completes its normal color choice and penalty", () => {
+    const state = drawFixture({ drawPile: [card("wild", "wild-draw-6"), card("later", "blue-8")] });
+    const played = applyGameCommand(state, { type: "draw-until-playable", playerId: "a" });
+    expect(played.ok).toBe(true);
+    expect(played.state).toMatchObject({
+      phase: "awaiting-choice", pendingChoice: { type: "choose-color", playerId: "a" },
+      unoWindow: { playerId: "a", declared: false }, drawStack: { amount: 6, minimumDrawValue: 6 },
+    });
+    const chosen = applyGameCommand(played.state, { type: "choose-color", playerId: "a", color: "yellow" });
+    expect(chosen.ok).toBe(true);
+    expect(chosen.state).toMatchObject({ phase: "playing", activeColor: "yellow", currentPlayerId: "b", revision: 2 });
+    expect(handOf(chosen.state, "a")).toEqual(["bad"]);
+    expect(chosen.state.drawPile).toEqual([card("later", "blue-8")]);
+  });
+
+  test("rejects draw-and-pass without a playable held card atomically", () => {
+    const state = drawFixture();
+    const before = structuredClone(state);
+    expect(applyGameCommand(state, { type: "draw-and-pass", playerId: "a" })).toEqual({ ok: false, code: "invalid-phase", state });
+    expect(state).toEqual(before);
   });
 
   // Catches taking the previous player in the wrong direction.
@@ -290,7 +331,7 @@ describe("roulette and Mercy", () => {
     if (mode === "roulette") { state.phase = "awaiting-choice"; state.pendingChoice = { type: "choose-roulette-color", playerId: "a" }; }
     const result = applyGameCommand(state, mode === "roulette" ? { type: "choose-roulette-color", playerId: "a", color: "yellow" } : { type: mode, playerId: "a" });
     expect(result.ok).toBe(true);
-    expect(result.state.players[0]).toMatchObject({ eliminated: true, hand: [] });
+    expect(result.state.players[0]).toMatchObject({ eliminated: true, hand: [], eliminatedByPlayerId: "a" });
     expect(result.state.drawPile.map(({ instanceId }) => instanceId)).toEqual(["untouched"]);
     expect(result.state).toMatchObject({ phase: "playing", currentPlayerId: "c", drawStack: null, pendingChoice: null });
     expect(result.state.discardPile).toEqual([card("top", "red-5")]);
@@ -302,7 +343,28 @@ describe("roulette and Mercy", () => {
     let result = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" });
     if (faceId === "red-7") result = applyGameCommand(result.state, { type: "choose-swap-target", playerId: "a", targetPlayerId: "b" });
     const eliminatedId = faceId === "red-0" ? "c" : "a";
-    expect(result.state.players.find(({ id }) => id === eliminatedId)).toMatchObject({ eliminated: true, hand: [] });
+    expect(result.state.players.find(({ id }) => id === eliminatedId)).toMatchObject({ eliminated: true, hand: [], eliminatedByPlayerId: "a" });
+  });
+
+  // Catches skipping Mercy on a voluntary draw or advancing after the last opponent is eliminated.
+  test.each([2, 3])("draw-and-pass applies Mercy and attribution with %i players", (count) => {
+    const state = actionFixture("red-3", count);
+    state.players[0]!.hand = Array.from({ length: 24 }, (_, i) => card(`held-${i}`, "red-1"));
+    state.drawPile = [card("twenty-fifth", "red-skip"), card("untouched", "yellow-3")];
+    const before = structuredClone(state);
+    const result = applyGameCommand(state, { type: "draw-and-pass", playerId: "a" });
+    expect(result.ok).toBe(true);
+    expect(result.state.players[0]).toMatchObject({ eliminated: true, hand: [], eliminatedByPlayerId: "a" });
+    expect(result.state.drawPile).toEqual([card("untouched", "yellow-3")]);
+    expect(result.state.discardPile).toEqual(before.discardPile);
+    expect(result.state).toMatchObject({ phase: count === 2 ? "finished" : "playing", winner: count === 2 ? "b" : null, revision: 1 });
+    if (result.ok) expect(result.events).toEqual(count === 2 ? [
+      { type: "cards-drawn", playerId: "a", cardIds: ["twenty-fifth"] },
+    ] : [
+      { type: "cards-drawn", playerId: "a", cardIds: ["twenty-fifth"] },
+      { type: "turn-changed", playerId: "b" },
+    ]);
+    expect(state).toEqual(before);
   });
 
   test("the last active player wins when a draw eliminates their only opponent", () => {
@@ -566,9 +628,9 @@ describe("draw stacking", () => {
     expect(state).toEqual(before);
   });
 
-  test("rejects ordinary drawing during a stack", () => {
+  test.each(["draw-until-playable", "draw-and-pass"] as const)("rejects %s during a stack", (type) => {
     const state = stackFixture();
-    expect(applyGameCommand(state, { type: "draw-until-playable", playerId: "a" })).toMatchObject({ ok: false, code: "invalid-phase" });
+    expect(applyGameCommand(state, { type, playerId: "a" })).toMatchObject({ ok: false, code: "invalid-phase" });
   });
 
   test("rejects taking a nonexistent penalty or acting out of turn", () => {
@@ -578,6 +640,22 @@ describe("draw stacking", () => {
 });
 
 describe("draw pile boundaries", () => {
+  // Catches a Discard All becoming drawable when its removed cards are recycled.
+  test("recycles Discard All extras while retaining the action as the visible discard", () => {
+    const state = actionFixture("red-discard-all");
+    state.players[0]!.hand.push(card("extra", "red-9"));
+    state.drawPile = [];
+    const played = applyGameCommand(state, { type: "play-card", playerId: "a", cardId: "action" });
+    const drawn = applyGameCommand(played.state, { type: "draw-until-playable", playerId: "b" });
+    expect(drawn.ok).toBe(true);
+    expect(drawn.state.discardPile[0]).toEqual(card("action", "red-discard-all"));
+    const recycledIds = [
+      ...handOf(drawn.state, "b"), ...drawn.state.drawPile.map(({ instanceId }) => instanceId),
+      ...drawn.state.discardPile.slice(1).map(({ instanceId }) => instanceId),
+    ].sort();
+    expect(recycledIds).toEqual(["b-keep", "extra", "top"]);
+    expect(drawn.state.discardPile.at(-1)?.instanceId).not.toBe("action");
+  });
   // Catches recycling the visible card or losing old discards during rebuild.
   test("rebuilds the draw pile while preserving the visible discard", () => {
     const state = drawFixture({ drawPile: [], discardPile: [card("recycle", "blue-5"), card("top", "red-5")] });

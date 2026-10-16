@@ -91,8 +91,8 @@ function reconcileUnoWindow(state: GameState): void {
     id === state.unoWindow!.playerId && !eliminated && hand.length === 1)) state.unoWindow = null;
 }
 
-function checkMercy(state: GameState): void {
-  state.players = applyMercyRule(state).players;
+function checkMercy(state: GameState, actingPlayerId: string): void {
+  state.players = applyMercyRule(state, actingPlayerId).players;
   reconcileUnoWindow(state);
   const active = state.players.filter(({ eliminated }) => !eliminated);
   if (active.length === 1) finishGame(state, active[0]!.id);
@@ -139,7 +139,7 @@ function playCard(state: GameState, playerId: string, card: PhysicalCard, events
   }
   if (face.kind === "number" && face.value === 0) {
     state.players = passHands(state).players;
-    checkMercy(state);
+    checkMercy(state, playerId);
     if (state.winner) return;
   }
   if (face.kind === "reverse" || face.kind === "wild-reverse-draw-4") state.direction = state.direction === 1 ? -1 : 1;
@@ -184,7 +184,7 @@ export function applyGameCommand(state: GameState, command: GameCommand): GameTr
         if (!drawn) return { ok: false, code: "deck-exhausted", state };
         next.players.find(({ id }) => id === window.playerId)!.hand.push(drawn);
         drawnIds.push(drawn.instanceId);
-        checkMercy(next);
+        checkMercy(next, command.playerId);
         if (next.players.find(({ id }) => id === window.playerId)!.eliminated) break;
       }
       next.unoWindow = null;
@@ -203,7 +203,7 @@ export function applyGameCommand(state: GameState, command: GameCommand): GameTr
     next.pendingChoice = null;
     if (command.type === "choose-swap-target") {
       next.players = swapHands(next, command.playerId, command.targetPlayerId).players;
-      checkMercy(next);
+      checkMercy(next, command.playerId);
     } else {
       // Choosing roulette is the affected next player's first gameplay action.
       beginGameplay(next);
@@ -216,7 +216,7 @@ export function applyGameCommand(state: GameState, command: GameCommand): GameTr
         drawn = card;
         next.players.find(({ id }) => id === command.playerId)!.hand.push(drawn);
         drawnIds.push(drawn.instanceId);
-        checkMercy(next);
+        checkMercy(next, command.playerId);
         if (next.players.find(({ id }) => id === command.playerId)!.eliminated) break;
       } while (faceOf(drawn).color !== command.color);
       events.push({ type: "cards-drawn", playerId: command.playerId, cardIds: drawnIds });
@@ -271,7 +271,7 @@ export function applyGameCommand(state: GameState, command: GameCommand): GameTr
       if (!drawn) return { ok: false, code: "deck-exhausted", state };
       next.players.find(({ id }) => id === command.playerId)!.hand.push(drawn);
       drawnIds.push(drawn.instanceId);
-      checkMercy(next);
+      checkMercy(next, command.playerId);
       if (next.players.find(({ id }) => id === command.playerId)!.eliminated) break;
     }
     next.drawStack = null;
@@ -285,7 +285,8 @@ export function applyGameCommand(state: GameState, command: GameCommand): GameTr
     if (!drawn) return { ok: false, code: "deck-exhausted", state };
     next.players.find(({ id }) => id === command.playerId)!.hand.push(drawn);
     events.push({ type: "cards-drawn", playerId: command.playerId, cardIds: [drawn.instanceId] });
-    advanceTurn(next, events);
+    checkMercy(next, command.playerId);
+    if (!next.winner) advanceTurn(next, events);
     next.revision++;
     return { ok: true, state: next, events };
   }
@@ -297,7 +298,7 @@ export function applyGameCommand(state: GameState, command: GameCommand): GameTr
       selected = drawn;
       next.players.find((player) => player.id === command.playerId)!.hand.push(selected);
       drawnIds.push(selected.instanceId);
-      checkMercy(next);
+      checkMercy(next, command.playerId);
       if (next.players.find(({ id }) => id === command.playerId)!.eliminated) break;
     } while (!isPlayable(next, selected));
     events.push({ type: "cards-drawn", playerId: command.playerId, cardIds: drawnIds });

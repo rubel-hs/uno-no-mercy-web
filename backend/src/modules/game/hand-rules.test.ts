@@ -45,5 +45,21 @@ test("Mercy removes hands at 25 and above while preserving 24 and both piles", (
   expect(next.players.map(({ eliminated, hand }) => [eliminated, hand.length])).toEqual([[false, 24], [true, 0], [true, 0], [true, 0]]);
   expect(next.drawPile).toEqual(before.drawPile);
   expect(next.discardPile).toEqual(before.discardPile);
+  expect(next.players.every(({ eliminatedByPlayerId }) => eliminatedByPlayerId === null)).toBe(true);
+  expect(state).toEqual(before);
+});
+
+// Catches dropping the gameplay actor or replacing a previously recorded cause.
+test("Mercy attributes only new eliminations to the supplied actor", () => {
+  const state = table();
+  state.players[1]!.eliminatedByPlayerId = "d";
+  state.players[2]!.hand = Array.from({ length: 25 }, (_, i) => ({ instanceId: `large-${i}`, faceId: "blue-2" }));
+  const before = structuredClone(state);
+  const next = applyMercyRule(state, "a");
+  expect(next.players[2]).toMatchObject({ eliminated: true, hand: [], eliminatedByPlayerId: "a" });
+  expect(next.players[0]).toMatchObject({ eliminated: false, eliminatedByPlayerId: null });
+  expect(next.players[1]).toMatchObject({ eliminated: true, eliminatedByPlayerId: "d" });
+  expect(applyMercyRule(next, "c").players[2]!.eliminatedByPlayerId).toBe("a");
+  expect(applyMercyRule(next).players[2]!.eliminatedByPlayerId).toBe("a");
   expect(state).toEqual(before);
 });
