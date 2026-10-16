@@ -36,7 +36,7 @@ Following Apple's human interface motion principles:
    - Respects `prefers-reduced-motion`: if active, card animations resolve instantaneously.
 
 ### Explicit Non-Goals & Anti-Goals
-- **NO Hand Interaction:** As explicitly specified, cards sitting in the player's hand have **zero hover elevation, tilt, or idle floating animations**. Cards in hand remain entirely static.
+- **NO Hand Interaction:** As explicitly specified by the user, cards sitting in the player's hand have **zero hover elevation, tilt, or idle floating animations**. Cards in hand remain entirely static.
 - **No Heavy Physics / Bouncing:** No spring oscillations, no exaggerated 3D flips, no screen shakes, and no particle sparkles.
 - **No Turn Blocking:** Animations must never block the client command queue or freeze user input. If another event arrives, the system handles it without desync.
 
@@ -69,6 +69,19 @@ Following Apple's human interface motion principles:
 - Opponent plays: Detected via snapshot diffs (`topDiscard` change accompanied by active player card count decrease).
 - Opponent draws: Detected via snapshot diffs (player card count increase and `drawCount` decrease).
 
+### 3.4 Edge Cases & Staging Decisions (Builder Calls)
+1. **DOM Staging & Placeholders:**
+   - **Throw:** During the 280ms flight, the played card slot maintains its exact layout space in the hand with `visibility: hidden`, preventing surrounding cards from shifting awkwardly mid-air. When the flight completes, the slot collapses and the center discard pile reveals the landed card.
+   - **Draw:** Incoming cards are staged until their respective flight animation arrives at the hand slot, at which point the card face becomes visible.
+2. **Special Rules Handling:**
+   - **Initial Deal:** Transitions from `lobby -> playing` or round resets are treated as instant deals (no 28 staggered flights), keeping round starts clean and prompt.
+   - **7-0 Hand Swaps:** Hand exchanges resolve directly in state without multi-card flight spaghetti across the screen.
+   - **Discard All:** The played Discard All card animates smoothly to the discard pile; additional matching cards in hand discard cleanly into the pile without cluttering the screen.
+3. **Wild Cards & Modal Dialog Sequencing:**
+   - When a Wild card is played, the card flight starts immediately towards the discard pile. The choice dialog (`GameChoiceDialog`) mounts seamlessly without interrupting or blocking the flight.
+4. **Stream Interruption & Fast-Forward:**
+   - If the player initiates an action (such as playing a newly arrived playable card) during a multi-card draw stream, any remaining in-flight or queued cards immediately fast-forward and settle into place, preventing layout jitter under the cursor.
+
 ---
 
 ## 4. Component Boundaries & Responsibilities
@@ -76,12 +89,14 @@ Following Apple's human interface motion principles:
 1. **`frontend/src/components/CardFlightOverlay.tsx` (New Component):**
    - High-performance fixed overlay managing active card flight instances.
    - Uses `motion` (`motion/react`) for GPU-accelerated transforms (`translate3d`, `rotate`, `scale`, `opacity`).
+   - Exposes a controller to trigger throw/draw animations and fast-forward active flights.
 2. **`frontend/src/components/PlayerSeat.tsx`:**
    - Strictly keeps cards static—ensures no hover translateY/scale rules apply to cards in hand.
    - Exposes element refs or stable data attributes (`data-card-id={cardId}`) so flight origin coordinates can be calculated accurately.
 3. **`frontend/src/components/LiveGameScreen.tsx`:**
    - Coordinates flight events between game snapshot updates, user actions, and the overlay manager.
    - Ref targets for `.pile--draw` and `.pile--discard`.
+   - Manages visual staging for top discard and hand cards during flight.
 4. **`frontend/src/index.css`:**
    - Remove any remaining hover elevation on hand cards to ensure static presentation.
    - Styling for flight overlay elements.
