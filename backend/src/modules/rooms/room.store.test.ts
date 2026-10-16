@@ -694,7 +694,8 @@ describe("disconnect, reconnect and cleanup", () => {
     value(room.command(1, { type: "choose-color", color: "blue" }));
     value(room.command(2, { type: "accept-draw" }));
     const eliminatedId = room.seats[2]!.playerId;
-    expect(room.state().players[2]).toMatchObject({ eliminated: true, hand: [], eliminatedByPlayerId: eliminatedId });
+    const eliminatorId = room.seats[1]!.playerId;
+    expect(room.state().players[2]).toMatchObject({ eliminated: true, hand: [], eliminatedByPlayerId: eliminatorId });
     expect(room.state().phase).toBe("playing");
 
     if (mode === "leave") value(room.command(2, { type: "leave-room" }));
@@ -703,14 +704,14 @@ describe("disconnect, reconnect and cleanup", () => {
       room.clock.advance(50_000);
     }
     expect(room.store.getRoom(room.roomCode)!.players.map(({ id }) => id)).not.toContain(eliminatedId);
-    expect(room.state().players[2]).toMatchObject({ eliminated: true, hand: [], eliminatedByPlayerId: eliminatedId });
+    expect(room.state().players[2]).toMatchObject({ eliminated: true, hand: [], eliminatedByPlayerId: eliminatorId });
     expect(room.state().phase).toBe("playing");
 
     // An ordinary departure ends the round without gaining a new gameplay cause.
     value(room.command(1, { type: "leave-room" }));
     expect(room.state()).toMatchObject({ phase: "finished", winner: room.seats[0]!.playerId });
     expect(room.state().players[1]).toMatchObject({ eliminated: true, eliminatedByPlayerId: null });
-    expect(room.state().players[2]).toMatchObject({ eliminated: true, hand: [], eliminatedByPlayerId: eliminatedId });
+    expect(room.state().players[2]).toMatchObject({ eliminated: true, hand: [], eliminatedByPlayerId: eliminatorId });
   });
 
   test("disconnect preserves the full hand and eligibility until exactly 50,000ms", () => {

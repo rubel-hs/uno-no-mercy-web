@@ -48,11 +48,12 @@ export type PendingChoice =
   | { type: "resolve-action"; playerId: string; cardId: string }
   | { type: "choose-color"; playerId: string }
   | { type: "choose-swap-target"; playerId: string }
-  | { type: "choose-roulette-color"; playerId: string };
+  | { type: "choose-roulette-color"; playerId: string; sourcePlayerId?: string };
 
 export interface DrawStack {
   amount: number;
   minimumDrawValue: number;
+  sourcePlayerId?: string;
 }
 
 export interface UnoWindow {

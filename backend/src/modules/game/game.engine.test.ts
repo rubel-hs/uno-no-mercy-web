@@ -375,6 +375,36 @@ describe("roulette and Mercy", () => {
     expect(result.state).toMatchObject({ phase: "finished", winner: "b", pendingChoice: null, drawStack: null, unoWindow: null });
     expect(handOf(result.state, "a")).toEqual([]);
   });
+
+  test("Mercy attribution on accept-draw and roulette credits the attacking player who played the card", () => {
+    // 1. Draw stack: "a" plays red-draw-4, "b" holds 22 cards and accepts draw
+    const drawState = actionFixture("red-draw-4", 3);
+    drawState.players[1]!.hand = Array.from({ length: 22 }, (_, i) => card(`b-${i}`, "blue-1"));
+    drawState.drawPile = Array.from({ length: 10 }, (_, i) => card(`d-${i}`, "yellow-1"));
+    const afterPlay = applyGameCommand(drawState, { type: "play-card", playerId: "a", cardId: "action" });
+    expect(afterPlay.ok).toBe(true);
+    expect(afterPlay.state.currentPlayerId).toBe("b");
+    const afterAccept = applyGameCommand(afterPlay.state, { type: "accept-draw", playerId: "b" });
+    expect(afterAccept.ok).toBe(true);
+    expect(afterAccept.state.players.find(({ id }) => id === "b")!).toMatchObject({
+      eliminated: true,
+      eliminatedByPlayerId: "a",
+    });
+
+    // 2. Roulette: "a" plays wild-color-roulette, "b" holds 24 cards and chooses color
+    const rouletteState = actionFixture("wild-color-roulette", 3);
+    rouletteState.players[1]!.hand = Array.from({ length: 24 }, (_, i) => card(`b-${i}`, "blue-1"));
+    rouletteState.drawPile = [card("r-1", "green-1"), card("r-2", "yellow-1")];
+    const afterRoulettePlay = applyGameCommand(rouletteState, { type: "play-card", playerId: "a", cardId: "action" });
+    expect(afterRoulettePlay.ok).toBe(true);
+    expect(afterRoulettePlay.state.pendingChoice).toMatchObject({ type: "choose-roulette-color", playerId: "b" });
+    const afterChoice = applyGameCommand(afterRoulettePlay.state, { type: "choose-roulette-color", playerId: "b", color: "yellow" });
+    expect(afterChoice.ok).toBe(true);
+    expect(afterChoice.state.players.find(({ id }) => id === "b")!).toMatchObject({
+      eliminated: true,
+      eliminatedByPlayerId: "a",
+    });
+  });
 });
 
 describe("serialized UNO race", () => {
@@ -590,7 +620,7 @@ describe("draw stacking", () => {
   test("extends a stack with a higher wild value and waits for its color", () => {
     const played = applyGameCommand(stackFixture(), { type: "play-card", playerId: "a", cardId: "high" });
     expect(played.ok).toBe(true);
-    expect(played.state.drawStack).toEqual({ amount: 16, minimumDrawValue: 6 });
+    expect(played.state.drawStack).toMatchObject({ amount: 16, minimumDrawValue: 6 });
     expect(played.state.pendingChoice).toEqual({ type: "choose-color", playerId: "a" });
     const chosen = applyGameCommand(played.state, { type: "choose-color", playerId: "a", color: "green" });
     expect(chosen.ok).toBe(true);

@@ -144,12 +144,12 @@ function playCard(state: GameState, playerId: string, card: PhysicalCard, events
   }
   if (face.kind === "reverse" || face.kind === "wild-reverse-draw-4") state.direction = state.direction === 1 ? -1 : 1;
   if (face.drawValue) {
-    state.drawStack = { amount: (state.drawStack?.amount ?? 0) + face.drawValue, minimumDrawValue: face.drawValue };
+    state.drawStack = { amount: (state.drawStack?.amount ?? 0) + face.drawValue, minimumDrawValue: face.drawValue, sourcePlayerId: playerId };
   }
   if (face.kind === "wild-color-roulette") {
     advanceTurn(state, events);
     state.phase = "awaiting-choice";
-    state.pendingChoice = { type: "choose-roulette-color", playerId: state.currentPlayerId };
+    state.pendingChoice = { type: "choose-roulette-color", playerId: state.currentPlayerId, sourcePlayerId: playerId };
     return;
   }
   if (face.color === "wild") {
@@ -208,6 +208,9 @@ export function applyGameCommand(state: GameState, command: GameCommand): GameTr
       // Choosing roulette is the affected next player's first gameplay action.
       beginGameplay(next);
       next.activeColor = command.color;
+      const sourcePlayerId = (state.pendingChoice?.type === "choose-roulette-color" && state.pendingChoice.sourcePlayerId)
+        ? state.pendingChoice.sourcePlayerId
+        : command.playerId;
       const drawnIds: string[] = [];
       let drawn: PhysicalCard;
       do {
@@ -216,7 +219,7 @@ export function applyGameCommand(state: GameState, command: GameCommand): GameTr
         drawn = card;
         next.players.find(({ id }) => id === command.playerId)!.hand.push(drawn);
         drawnIds.push(drawn.instanceId);
-        checkMercy(next, command.playerId);
+        checkMercy(next, sourcePlayerId);
         if (next.players.find(({ id }) => id === command.playerId)!.eliminated) break;
       } while (faceOf(drawn).color !== command.color);
       events.push({ type: "cards-drawn", playerId: command.playerId, cardIds: drawnIds });
@@ -265,13 +268,14 @@ export function applyGameCommand(state: GameState, command: GameCommand): GameTr
   const events: GameEvent[] = [];
   beginGameplay(next);
   if (command.type === "accept-draw") {
+    const sourcePlayerId = next.drawStack!.sourcePlayerId ?? command.playerId;
     const drawnIds: string[] = [];
     for (let i = 0; i < next.drawStack!.amount; i++) {
       const drawn = drawCard(next);
       if (!drawn) return { ok: false, code: "deck-exhausted", state };
       next.players.find(({ id }) => id === command.playerId)!.hand.push(drawn);
       drawnIds.push(drawn.instanceId);
-      checkMercy(next, command.playerId);
+      checkMercy(next, sourcePlayerId);
       if (next.players.find(({ id }) => id === command.playerId)!.eliminated) break;
     }
     next.drawStack = null;
