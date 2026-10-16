@@ -20,6 +20,21 @@ export type PlayerSeatProps = {
   disabled?: boolean;
 };
 
+export function calculateHandOverlap(cardCount: number, cardWidth = 100, containerWidth = 900): number {
+  if (cardCount <= 7) {
+    return Math.round(cardWidth * 0.42);
+  }
+  const naturalWidth = cardCount * cardWidth;
+  if (naturalWidth <= containerWidth) {
+    return Math.round(cardWidth * 0.42);
+  }
+  const neededOverlap = (naturalWidth - containerWidth) / (cardCount - 1);
+  const minVisibleBadge = 34;
+  const maxOverlap = cardWidth - minVisibleBadge;
+  const minOverlap = Math.round(cardWidth * 0.42);
+  return Math.round(Math.min(maxOverlap, Math.max(minOverlap, neededOverlap)));
+}
+
 export function PlayerSeat({
   playerId,
   cards,
@@ -40,6 +55,7 @@ export function PlayerSeat({
 }: PlayerSeatProps) {
   const isActualActive = active && !eliminated;
   const visibleCards = cards ?? Array.from({ length: Math.min(count, 7) }, () => cardBack);
+  const dynamicOverlap = position === "bottom" ? calculateHandOverlap(visibleCards.length) : undefined;
 
   return (
     <section
@@ -62,7 +78,15 @@ export function PlayerSeat({
           {points}<i aria-hidden="true">★</i>
         </span>
       </div>
-      <div className="player-seat__hand" aria-hidden={position !== "bottom" ? "true" : undefined}>
+      <div
+        className="player-seat__hand"
+        aria-hidden={position !== "bottom" ? "true" : undefined}
+        style={
+          dynamicOverlap !== undefined
+            ? ({ "--dynamic-overlap": `-${dynamicOverlap}px` } as React.CSSProperties)
+            : undefined
+        }
+      >
         {visibleCards.map((card, index) => {
           const instanceId = cardIds?.[index] ?? (position === "bottom" ? card.id : `${card.id}-${index}`);
           const isLegal = legalCardIds ? legalCardIds.includes(instanceId) : true;
