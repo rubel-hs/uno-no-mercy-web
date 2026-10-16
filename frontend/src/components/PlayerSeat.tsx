@@ -64,7 +64,7 @@ export function PlayerSeat({
       </div>
       <div className="player-seat__hand" aria-hidden={position !== "bottom" ? "true" : undefined}>
         {visibleCards.map((card, index) => {
-          const instanceId = cardIds?.[index] ?? card.id;
+          const instanceId = cardIds?.[index] ?? (position === "bottom" ? card.id : `${card.id}-${index}`);
           const isLegal = legalCardIds ? legalCardIds.includes(instanceId) : true;
           const isPlayable = position === "bottom" && isLegal && !disabled;
           const isHidden = hiddenCardInstanceId === instanceId || Boolean(hiddenCardIds?.includes(instanceId));
@@ -78,7 +78,7 @@ export function PlayerSeat({
               } ${isHidden ? "is-staged-hidden" : ""}`}
               data-card-instance-id={instanceId}
               disabled={position === "bottom" && (!isPlayable || isHidden)}
-              key={`${name}-${card.id}-${index}`}
+              key={cardIds?.[index] ? `${name}-${cardIds[index]}` : `${name}-${card.id}-${index}`}
               onClick={() => {
                 if (isPlayable && !isHidden && onPlayCard) {
                   onPlayCard(instanceId);

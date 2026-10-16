@@ -86,6 +86,8 @@ export function LiveGameScreen({
   }, []);
 
   const handleFlightEnd = useCallback((flightId: string) => {
+    let resolvedVisualDiscard: CardDefinition | null = null;
+
     setActiveFlights((prev) => {
       const next = prev.filter((f) => f.id !== flightId);
       activeFlightsRef.current = next;
@@ -94,15 +96,19 @@ export function LiveGameScreen({
       );
       if (!remainingDiscardFlight) {
         if (flightId.startsWith("flight-play-") && playedCardRef.current) {
-          setVisualTopDiscard(playedCardRef.current);
+          resolvedVisualDiscard = playedCardRef.current;
         } else if (snapshotRef.current.topDiscard) {
-          setVisualTopDiscard(findCard(snapshotRef.current.topDiscard.faceId));
+          resolvedVisualDiscard = findCard(snapshotRef.current.topDiscard.faceId);
         } else if (playedCardRef.current) {
-          setVisualTopDiscard(playedCardRef.current);
+          resolvedVisualDiscard = playedCardRef.current;
         }
       }
       return next;
     });
+
+    if (resolvedVisualDiscard) {
+      setVisualTopDiscard(resolvedVisualDiscard);
+    }
 
     if (flightId.startsWith("flight-play-")) {
       setHiddenCardInstanceId(null);
@@ -155,13 +161,23 @@ export function LiveGameScreen({
             const opponentSeatEl =
               document.querySelector(`[data-player-id="${prevActiveId}"]`) ||
               document.querySelector(`.player-seat[aria-label*="${prevOpponent.name}"]`);
+            const cardOrHandEl =
+              opponentSeatEl?.querySelector(".player-seat__card") ||
+              opponentSeatEl?.querySelector(".player-seat__hand") ||
+              opponentSeatEl;
 
-            const fromRect = getElementCoordinates(opponentSeatEl, {
+            const rawFromRect = getElementCoordinates(cardOrHandEl, {
               x: 300,
               y: 100,
               width: 80,
               height: 120,
             });
+            const fromRect = {
+              x: rawFromRect.x,
+              y: rawFromRect.y,
+              width: Math.min(rawFromRect.width, 80),
+              height: Math.min(rawFromRect.height, 120),
+            };
             const toRect = getElementCoordinates(discardPileRef.current, {
               x: 400,
               y: 300,
@@ -182,10 +198,11 @@ export function LiveGameScreen({
       }
 
       // Local player draw flights
+      const didDrawFromDeck = snapshot.drawCount < prevSnapshot.drawCount;
       const prevHandIds = new Set(prevSnapshot.hand.map((h) => h.instanceId));
       const newlyDrawnCards = snapshot.hand.filter((h) => !prevHandIds.has(h.instanceId));
 
-      if (newlyDrawnCards.length > 0) {
+      if (didDrawFromDeck && newlyDrawnCards.length > 0) {
         const newCardIds = newlyDrawnCards.map((c) => c.instanceId);
         setHiddenCardIds((prev) => [...prev, ...newCardIds]);
 
@@ -238,12 +255,22 @@ export function LiveGameScreen({
             const opponentSeatEl =
               document.querySelector(`[data-player-id="${player.id}"]`) ||
               document.querySelector(`.player-seat[aria-label*="${player.name}"]`);
-            const toRect = getElementCoordinates(opponentSeatEl, {
+            const cardOrHandEl =
+              opponentSeatEl?.querySelector(".player-seat__card") ||
+              opponentSeatEl?.querySelector(".player-seat__hand") ||
+              opponentSeatEl;
+            const rawToRect = getElementCoordinates(cardOrHandEl, {
               x: 300,
               y: 100,
               width: 80,
               height: 120,
             });
+            const toRect = {
+              x: rawToRect.x,
+              y: rawToRect.y,
+              width: Math.min(rawToRect.width, 80),
+              height: Math.min(rawToRect.height, 120),
+            };
             const drawFromRect = getElementCoordinates(drawPileRef.current, {
               x: 250,
               y: 300,

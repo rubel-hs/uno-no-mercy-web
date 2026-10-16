@@ -607,6 +607,35 @@ describe("LiveGameScreen", () => {
       expect(screen.queryByTestId(/card-flight-flight-draw-/)).not.toBeInTheDocument();
     });
 
+    test("skips draw flight on 7-0 hand swap when hand changes without drawCount decreasing", async () => {
+      const initialSnapshot = createGameSnapshot({
+        hand: [
+          { instanceId: "card-1", faceId: "red-5" },
+          { instanceId: "card-2", faceId: "blue-draw-2" },
+        ],
+        drawCount: 100,
+      });
+
+      const { rerender } = render(
+        <LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={initialSnapshot} />,
+      );
+
+      // Hand swap: viewer receives new cards without drawCount changing
+      const swappedSnapshot = createGameSnapshot({
+        hand: [
+          { instanceId: "card-99", faceId: "green-7" },
+          { instanceId: "card-100", faceId: "yellow-0" },
+        ],
+        drawCount: 100,
+      });
+
+      rerender(
+        <LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={swappedSnapshot} />,
+      );
+
+      expect(screen.queryByTestId(/card-flight-flight-draw-/)).not.toBeInTheDocument();
+    });
+
     test("immediately flushes pending flights when player initiates a play action", async () => {
       const onCommand = vi.fn();
       const initialSnapshot = createGameSnapshot({

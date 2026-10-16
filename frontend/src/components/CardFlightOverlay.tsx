@@ -51,12 +51,17 @@ export function CardFlightOverlay({
         const duration = shouldReduceMotion ? 0 : (flight.duration ?? DEFAULT_FLIGHT_DURATION);
         const delay = shouldReduceMotion ? 0 : (flight.delay ?? 0);
 
+        const toScale =
+          flight.fromRect.width > 0 && flight.toRect.width > 0
+            ? flight.toRect.width / flight.fromRect.width
+            : 1;
+
         return (
           <motion.div
             key={flight.id}
             animate={{
               opacity: 1,
-              scale: 1,
+              scale: toScale,
               x: flight.toRect.x,
               y: flight.toRect.y,
             }}
@@ -77,6 +82,7 @@ export function CardFlightOverlay({
                 left: 0,
                 position: "absolute",
                 top: 0,
+                transformOrigin: "top left",
                 width: flight.fromRect.width,
                 "--card-w": `${flight.fromRect.width}px`,
               } as CSSProperties
