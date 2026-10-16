@@ -3,8 +3,9 @@ import { applyGameCommand, createGameState } from "../game/game.engine";
 import { parseClientMessage, type CommandErrorCode, type PlayerSnapshot, type ServerMessage } from "../game/game.protocol";
 import { projectPlayerSnapshot } from "../game/game.projector";
 import type { GameState } from "../game/game.types";
+import { calculateRoundResult } from "../game/scoring";
 import { getNextEligiblePlayerId } from "../game/turn-order";
-import type { RoomCredentials, RoomInspection, RoomPeer, RoomResult, RoomStore, RoomStoreDeps } from "./room.types";
+import type { MatchState, RoomCredentials, RoomInspection, RoomPeer, RoomResult, RoomStore, RoomStoreDeps } from "./room.types";
 
 const ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const GRACE_MS = 50_000;
@@ -36,6 +37,7 @@ interface Room {
   hostPlayerId: string;
   revision: number;
   seats: Map<string, Seat>;
+  match: MatchState;
   game: GameState | null;
 }
 
@@ -169,8 +171,38 @@ export function createRoomStore(overrides: Partial<RoomStoreDeps> = {}): RoomSto
     return room.revision;
   }
 
-  function eliminate(room: Room, playerId: string): void {
-    const state = room.game!;
+  function updateRound(room: Room, game: GameState): void {
+    let match = room.match;
+    if (game.phase === "finished" && match.finalizedRoundNumber !== match.roundNumber) {
+      const result = calculateRoundResult(game, match.scoresByPlayerId, match.roundNumber);
+      match = {
+        ...match,
+        status: result.matchWinnerId === null ? "round-complete" : "match-complete",
+        scoresByPlayerId: Object.fromEntries(result.breakdown.map(({ playerId, cumulativePoints }) => [playerId, cumulativePoints])),
+        lastRoundResult: result,
+        winner: result.matchWinnerId,
+        finalizedRoundNumber: match.roundNumber,
+      };
+    }
+    // Calculate before replacing either state so a scoring failure commits neither.
+    room.game = game;
+    room.match = match;
+  }
+
+  function nextDealerIndex(room: Room): number {
+    // The old round retains departed players, so its order anchors the rotation
+    // even if the dealer or seats before the dealer have since left.
+    const players = room.game!.players;
+    const retainedIds = [...room.seats.keys()];
+    for (let offset = 1; offset <= players.length; offset++) {
+      const id = players[(room.match.dealerIndex + offset) % players.length]!.id;
+      const index = retainedIds.indexOf(id);
+      if (index !== -1) return index;
+    }
+    throw new Error("No retained dealer");
+  }
+
+  function eliminate(state: GameState, playerId: string): void {
     // Departures create no gameplay cause and preserve any earlier Mercy attribution.
     state.players = state.players.map((player) => player.id === playerId ? { ...player, hand: [], eliminated: true } : player);
     if (state.unoWindow?.playerId === playerId) state.unoWindow = null;
@@ -197,14 +229,18 @@ export function createRoomStore(overrides: Partial<RoomStoreDeps> = {}): RoomSto
   }
 
   function removeSeat(room: Room, seat: Seat): void {
+    if (room.game) {
+      const game = structuredClone(room.game);
+      eliminate(game, seat.id);
+      updateRound(room, game);
+    }
     cancelExpiry(seat);
     room.seats.delete(seat.id);
     tokens.delete(seat.token);
     const peer = seat.peer;
     seat.peer = null;
     if (peer) closePeer(peer);
-    if (room.game) eliminate(room, seat.id);
-    else if (room.hostPlayerId === seat.id) room.hostPlayerId = room.seats.keys().next().value ?? "";
+    if (room.hostPlayerId === seat.id) room.hostPlayerId = room.seats.keys().next().value ?? "";
   }
 
   function expireDueSeats(room: Room): void {
@@ -260,6 +296,7 @@ export function createRoomStore(overrides: Partial<RoomStoreDeps> = {}): RoomSto
 
   function retainSeat(room: Room, seat: Seat): RoomCredentials {
     room.seats.set(seat.id, seat);
+    room.match.scoresByPlayerId[seat.id] = 0;
     tokens.add(seat.token);
     // Also bound abandoned REST create/join requests that never authenticate.
     startGrace(room, seat);
@@ -285,7 +322,13 @@ export function createRoomStore(overrides: Partial<RoomStoreDeps> = {}): RoomSto
         if (!code) return failure("INTERNAL_ERROR");
         const seat = newSeat(name);
         if (!seat) return failure("INTERNAL_ERROR");
-        const room: Room = { code, hostPlayerId: seat.id, revision: 0, seats: new Map(), game: null };
+        const room: Room = {
+          code, hostPlayerId: seat.id, revision: 0, seats: new Map(), game: null,
+          match: {
+            status: "lobby", roundNumber: 0, targetScore: 1000, scoresByPlayerId: {},
+            lastRoundResult: null, winner: null, finalizedRoundNumber: null, dealerIndex: 0,
+          },
+        };
         rooms.set(code, room);
         return { ok: true, value: retainSeat(room, seat) };
       } catch { return failure("INTERNAL_ERROR"); }
@@ -335,26 +378,37 @@ export function createRoomStore(overrides: Partial<RoomStoreDeps> = {}): RoomSto
       const { command, commandId, revision } = parsed.value;
       if (seat.commands.has(commandId)) return failure("DUPLICATE_COMMAND", room.revision);
       if (revision !== room.revision) return failure("STALE_REVISION", room.revision);
-      if (command.type === "start-game") {
-        if (room.game) return failure("ROOM_STARTED", room.revision);
-        if (room.hostPlayerId !== playerId) return failure("NOT_HOST", room.revision);
-        if (room.seats.size < 2) return failure("NOT_ENOUGH_PLAYERS", room.revision);
-        try {
+      try {
+        if (command.type === "start-game" || command.type === "start-next-round") {
+          const firstRound = command.type === "start-game";
+          if (firstRound && room.game) return failure("ROOM_STARTED", room.revision);
+          if (room.hostPlayerId !== playerId) return failure("NOT_HOST", room.revision);
+          if (!firstRound) {
+            if (room.match.status === "match-complete") return failure("match-complete", room.revision);
+            if (room.match.status !== "round-complete") return failure("round-not-complete", room.revision);
+          }
+          if (room.seats.size < 2) return failure("NOT_ENOUGH_PLAYERS", room.revision);
           const deck = shuffleDeck(createDeck(deps.cardIdFactory), deps.random);
-          room.game = createGameState({ playerIds: [...room.seats.keys()], deck, dealerIndex: Math.floor(deps.random() * room.seats.size) });
-          room.game.players = room.game.players.map((player) => ({ ...player, name: room.seats.get(player.id)!.name }));
-        } catch { return failure("INTERNAL_ERROR", room.revision); }
-      } else if (command.type === "start-next-round") {
-        if (room.hostPlayerId !== playerId) return failure("NOT_HOST", room.revision);
-        return failure("round-not-complete", room.revision);
-      } else if (command.type === "leave-room") {
-        removeSeat(room, seat);
-      } else {
-        if (!room.game) return failure("invalid-phase", room.revision);
-        const transition = applyGameCommand(room.game, { ...command, playerId });
-        if (!transition.ok) return failure(transition.code, room.revision);
-        room.game = transition.state;
-      }
+          const dealerIndex = firstRound ? Math.floor(deps.random() * room.seats.size) : nextDealerIndex(room);
+          const game = createGameState({ playerIds: [...room.seats.keys()], deck, dealerIndex });
+          game.players = game.players.map((player) => ({ ...player, name: room.seats.get(player.id)!.name }));
+          const match: MatchState = {
+            ...room.match, status: "round-active", roundNumber: room.match.roundNumber + 1, dealerIndex,
+            scoresByPlayerId: firstRound
+              ? Object.fromEntries([...room.seats.keys()].map((id) => [id, 0]))
+              : room.match.scoresByPlayerId,
+          };
+          room.game = game;
+          room.match = match;
+        } else if (command.type === "leave-room") {
+          removeSeat(room, seat);
+        } else {
+          if (!room.game || room.match.status !== "round-active") return failure("invalid-phase", room.revision);
+          const transition = applyGameCommand(room.game, { ...command, playerId });
+          if (!transition.ok) return failure(transition.code, room.revision);
+          updateRound(room, transition.state);
+        }
+      } catch { return failure("INTERNAL_ERROR", room.revision); }
       seat.commands.add(commandId);
       const nextRevision = commit(room);
       flush();
@@ -366,6 +420,7 @@ export function createRoomStore(overrides: Partial<RoomStoreDeps> = {}): RoomSto
       return structuredClone({
         roomCode: room.code, hostPlayerId: room.hostPlayerId, revision: room.revision,
         players: [...room.seats.values()].map((seat) => ({ id: seat.id, name: seat.name, online: Boolean(seat.peer), reconnectDeadline: seat.reconnectDeadline })),
+        match: room.match,
         game: room.game ? gameWithMetadata(room) : null,
       });
     },

@@ -72,7 +72,7 @@ function harness(overrides: Partial<RoomStoreDeps> = {}) {
 
 // Real canonical cards + a Fisher-Yates random stream arrange actual engine deals.
 // No room internals or engine transitions are replaced or mutated by the fixtures.
-function dealRandom(hands: string[][], top = "red-5"): () => number {
+function dealRandom(hands: string[][], top = "red-5", dealerIndex = hands.length - 1): () => number {
   let id = 0;
   const original = createDeck(() => `card-${++id}`);
   const remaining = [...original];
@@ -82,7 +82,9 @@ function dealRandom(hands: string[][], top = "red-5"): () => number {
     return remaining.splice(index, 1)[0]!;
   };
   const desired: PhysicalCard[] = [];
-  for (let round = 0; round < 7; round++) for (const hand of hands) desired.push(take(hand[round]!));
+  for (let round = 0; round < 7; round++) for (let offset = 1; offset <= hands.length; offset++) {
+    desired.push(take(hands[(dealerIndex + offset) % hands.length]![round]!));
+  }
   desired.push(take(top), ...remaining);
   const shuffled = [...original];
   const samples: number[] = [];
@@ -91,8 +93,21 @@ function dealRandom(hands: string[][], top = "red-5"): () => number {
     samples.push((j + 0.5) / (i + 1));
     [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
   }
-  samples.push(0.999999); // The last dealer makes seat zero the first actor.
+  samples.push((dealerIndex + 0.5) / hands.length);
   return () => samples.shift() ?? 0.999999;
+}
+
+function roundDeals(deals: { hands: string[][]; dealerIndex: number }[]): () => number {
+  const samples = deals.flatMap(({ hands, dealerIndex }, index) => {
+    const random = dealRandom(hands, "red-5", dealerIndex);
+    // Only the first round chooses a random dealer; subsequent rounds rotate.
+    return Array.from({ length: index === 0 ? 168 : 167 }, random);
+  });
+  return () => {
+    const sample = samples.shift();
+    if (sample === undefined) throw new Error("Unexpected round/dealer random sample");
+    return sample;
+  };
 }
 
 const defaultHands = [
@@ -120,8 +135,8 @@ function lobby(count = 3, overrides: Partial<RoomStoreDeps> = {}) {
   return { store, clock, seats, peers, roomCode, command };
 }
 
-function game(hands = defaultHands.slice(0, 3)) {
-  const result = lobby(hands.length, { random: dealRandom(hands) });
+function game(hands = defaultHands.slice(0, 3), overrides: Partial<RoomStoreDeps> = {}) {
+  const result = lobby(hands.length, { random: dealRandom(hands), ...overrides });
   value(result.command(0, { type: "start-game" }));
   const state = () => result.store.getRoom(result.roomCode)!.game!;
   const play = (index: number, faceId: string, id?: string) => {
@@ -255,6 +270,287 @@ describe("room creation and lobby", () => {
     clock.advance(100_000);
     expect(store.getRoom(seat.roomCode)!.players).toHaveLength(1);
     expect(clock.timers.size).toBe(0);
+  });
+});
+
+const winningHand = ["red-discard-all", "red-1", "red-2", "red-3", "red-4", "red-8", "red-9"];
+const scoringHands = [winningHand, defaultHands[1]!, defaultHands[2]!];
+
+describe("room-owned match lifecycle", () => {
+  test("creates zeroed lobby scores for every seat and returns detached match inspection", () => {
+    const room = lobby(1);
+    const hostId = room.seats[0]!.playerId;
+    expect(room.store.getRoom(room.roomCode)!.match).toEqual({
+      status: "lobby", roundNumber: 0, targetScore: 1000, scoresByPlayerId: { [hostId]: 0 },
+      lastRoundResult: null, winner: null, finalizedRoundNumber: null, dealerIndex: 0,
+    });
+    const guest = value(room.store.joinRoom(room.roomCode, "Bob"));
+    const copy = room.store.getRoom(room.roomCode)!;
+    expect(copy.match.scoresByPlayerId).toEqual({ [hostId]: 0, [guest.playerId]: 0 });
+    copy.match.scoresByPlayerId[hostId] = 999;
+    copy.match.roundNumber = 42;
+    expect(room.store.getRoom(room.roomCode)!.match).toMatchObject({
+      roundNumber: 0, scoresByPlayerId: { [hostId]: 0, [guest.playerId]: 0 },
+    });
+  });
+
+  test.each([0, 1, 2])("starts round one with randomized dealer %i and a complete fresh deck", (dealerIndex) => {
+    const room = lobby(3, { random: dealRandom(scoringHands, "red-5", dealerIndex) });
+    const before = room.store.getRoom(room.roomCode)!;
+    value(room.command(0, { type: "start-game" }));
+    const after = room.store.getRoom(room.roomCode)!;
+    expect(after.match).toEqual({
+      status: "round-active", roundNumber: 1, targetScore: 1000,
+      scoresByPlayerId: Object.fromEntries(room.seats.map(({ playerId }) => [playerId, 0])),
+      lastRoundResult: null, winner: null, finalizedRoundNumber: null, dealerIndex,
+    });
+    expect(after.revision).toBe(before.revision + 1);
+    expect(after.game).toMatchObject({ revision: after.revision, currentPlayerId: room.seats[(dealerIndex + 1) % 3]!.playerId });
+    expect(after.game!.players.map(({ hand }) => hand.map(({ faceId }) => faceId))).toEqual(scoringHands);
+    const cards = [...after.game!.drawPile, ...after.game!.discardPile, ...after.game!.players.flatMap(({ hand }) => hand)];
+    expect(cards).toHaveLength(168);
+    expect(new Set(cards.map(({ instanceId }) => instanceId)).size).toBe(168);
+  });
+
+  test("finalizes a winning play with exact scores in the same room revision", () => {
+    const room = game(scoringHands);
+    const before = room.state().revision;
+    value(room.play(0, "red-discard-all"));
+    const after = room.store.getRoom(room.roomCode)!;
+    const alice = room.seats[0]!.playerId;
+    const bob = room.seats[1]!.playerId;
+    const carol = room.seats[2]!.playerId;
+    // Bob: 50 + 1 + 2 + 3 + 4 + 8 + 9 = 77; Carol: 20 + 27 = 47.
+    expect(after.match).toEqual({
+      status: "round-complete", roundNumber: 1, targetScore: 1000, dealerIndex: 2,
+      finalizedRoundNumber: 1, winner: null, scoresByPlayerId: { [alice]: 124, [bob]: 0, [carol]: 0 },
+      lastRoundResult: {
+        roundNumber: 1, winnerId: alice, matchWinnerId: null,
+        breakdown: [
+          { playerId: alice, cardPoints: 124, eliminationBonus: 0, roundPoints: 124, cumulativePoints: 124 },
+          { playerId: bob, cardPoints: 0, eliminationBonus: 0, roundPoints: 0, cumulativePoints: 0 },
+          { playerId: carol, cardPoints: 0, eliminationBonus: 0, roundPoints: 0, cumulativePoints: 0 },
+        ],
+      },
+    });
+    expect(after.revision).toBe(before + 1);
+    expect(after.game).toMatchObject({ phase: "finished", winner: alice, revision: after.revision });
+  });
+
+  test("retries, reconnects, inspection and departures cannot finalize the same round twice", () => {
+    const room = game(scoringHands);
+    const message = envelope({ type: "play-card", cardId: room.state().players[0]!.hand[0]!.instanceId }, room.state().revision, "finish-once");
+    value(room.store.handleCommand(room.roomCode, room.seats[0]!.playerId, message));
+    const completed = room.store.getRoom(room.roomCode)!;
+    expect(completed.match).toMatchObject({ finalizedRoundNumber: 1, scoresByPlayerId: { [room.seats[0]!.playerId]: 124 } });
+    expect(room.store.handleCommand(room.roomCode, room.seats[0]!.playerId, message)).toMatchObject({ ok: false, code: "DUPLICATE_COMMAND" });
+    expect(room.command(0, message.command)).toMatchObject({ ok: false, code: "invalid-phase" });
+    expect(room.store.getRoom(room.roomCode)).toEqual(completed);
+    room.store.disconnect(room.roomCode, room.seats[0]!.playerId, room.peers[0]!.id);
+    value(room.store.connect(room.roomCode, room.seats[0]!.token, peer("round-result-reconnect")));
+    value(room.command(1, { type: "leave-room" }));
+    expect(room.store.getRoom(room.roomCode)!.match).toEqual(completed.match);
+    completed.match.lastRoundResult!.breakdown[0]!.cumulativePoints = 999;
+    expect(room.store.getRoom(room.roomCode)!.match.lastRoundResult!.breakdown[0]!.cumulativePoints).toBe(124);
+  });
+
+  test("rejects every gameplay command while the round result is waiting", () => {
+    const room = game(scoringHands);
+    value(room.play(0, "red-discard-all"));
+    const before = room.store.getRoom(room.roomCode)!;
+    expect(before.match).toMatchObject({ status: "round-complete" });
+    const commands: ClientCommand[] = [
+      { type: "play-card", cardId: "old-card" }, { type: "draw-until-playable" }, { type: "draw-and-pass" },
+      { type: "accept-draw" }, { type: "choose-color", color: "red" },
+      { type: "choose-swap-target", targetPlayerId: room.seats[1]!.playerId },
+      { type: "choose-roulette-color", color: "blue" }, { type: "declare-uno" },
+      { type: "catch-uno", targetPlayerId: room.seats[1]!.playerId },
+    ];
+    for (const command of commands) expect(room.command(0, command)).toMatchObject({ ok: false, code: "invalid-phase" });
+    expect(room.store.getRoom(room.roomCode)).toEqual(before);
+  });
+
+  test("only the host starts the next round, committing one revision and one snapshot per peer", () => {
+    const room = game(scoringHands);
+    value(room.play(0, "red-discard-all"));
+    const before = room.store.getRoom(room.roomCode)!;
+    expect(room.command(1, { type: "start-next-round" }, "next")).toMatchObject({ ok: false, code: "NOT_HOST" });
+    expect(room.store.getRoom(room.roomCode)).toEqual(before);
+    const counts = room.peers.map(({ messages }) => messages.length);
+    expect(value(room.command(0, { type: "start-next-round" }, "next"))).toEqual({ revision: before.revision + 1 });
+    expect(room.store.getRoom(room.roomCode)!.match).toMatchObject({ status: "round-active", roundNumber: 2 });
+    room.peers.forEach((connection, index) => {
+      expect(connection.messages).toHaveLength(counts[index]! + 1);
+      expect(latest(connection).revision).toBe(before.revision + 1);
+    });
+  });
+
+  test.each(["lobby", "round-active"] as const)("rejects next-round in %s without consuming the command ID", (status) => {
+    const room = lobby(3, { random: dealRandom(scoringHands) });
+    if (status === "round-active") value(room.command(0, { type: "start-game" }));
+    const before = room.store.getRoom(room.roomCode)!;
+    expect(before.match).toMatchObject({ status });
+    expect(room.command(0, { type: "start-next-round" }, "retry-next")).toMatchObject({ ok: false, code: "round-not-complete" });
+    expect(room.store.getRoom(room.roomCode)).toEqual(before);
+    if (status === "lobby") value(room.command(0, { type: "start-game" }));
+    value(room.command(0, { type: "play-card", cardId: room.store.getRoom(room.roomCode)!.game!.players[0]!.hand[0]!.instanceId }));
+    value(room.command(0, { type: "start-next-round" }, "retry-next"));
+  });
+
+  test("rotates the dealer, replaces all physical cards, and carries scores and results into later rounds", () => {
+    const secondHands = [defaultHands[1]!, winningHand, defaultHands[2]!];
+    const room = game(scoringHands, { random: roundDeals([
+      { hands: scoringHands, dealerIndex: 2 }, { hands: secondHands, dealerIndex: 0 },
+    ]) });
+    const firstGame = room.state();
+    const oldIds = new Set([...firstGame.drawPile, ...firstGame.discardPile, ...firstGame.players.flatMap(({ hand }) => hand)].map(({ instanceId }) => instanceId));
+    value(room.play(0, "red-discard-all"));
+    const completed = room.store.getRoom(room.roomCode)!.match;
+    value(room.command(0, { type: "start-next-round" }));
+    const next = room.store.getRoom(room.roomCode)!;
+    expect(next.match).toEqual({ ...completed, status: "round-active", roundNumber: 2, dealerIndex: 0 });
+    expect(next.game).toMatchObject({
+      phase: "playing", direction: 1, currentPlayerId: room.seats[1]!.playerId,
+      revision: next.revision, gameplaySequence: 0, pendingChoice: null, drawStack: null, unoWindow: null, winner: null,
+    });
+    expect(next.game!.players.map(({ hand }) => hand.map(({ faceId }) => faceId))).toEqual(secondHands);
+    const cards = [...next.game!.drawPile, ...next.game!.discardPile, ...next.game!.players.flatMap(({ hand }) => hand)];
+    expect(cards).toHaveLength(168);
+    expect(new Set(cards.map(({ instanceId }) => instanceId)).size).toBe(168);
+    expect(cards.some(({ instanceId }) => oldIds.has(instanceId))).toBe(false);
+    value(room.play(1, "red-discard-all"));
+    expect(room.store.getRoom(room.roomCode)!.match).toMatchObject({
+      status: "round-complete", roundNumber: 2, finalizedRoundNumber: 2,
+      scoresByPlayerId: { [room.seats[0]!.playerId]: 124, [room.seats[1]!.playerId]: 124, [room.seats[2]!.playerId]: 0 },
+      lastRoundResult: { roundNumber: 2, winnerId: room.seats[1]!.playerId },
+    });
+  });
+
+  test("stale and duplicate next-round commands never redeal, rotate or change scores", () => {
+    const room = game(scoringHands);
+    value(room.play(0, "red-discard-all"));
+    const before = room.store.getRoom(room.roomCode)!;
+    const message = envelope({ type: "start-next-round" }, before.revision, "next-once");
+    const send = (input: ClientEnvelope) => room.store.handleCommand(room.roomCode, room.seats[0]!.playerId, input);
+    expect(send({ ...message, revision: before.revision - 1 })).toMatchObject({ ok: false, code: "STALE_REVISION" });
+    expect(room.store.getRoom(room.roomCode)).toEqual(before);
+    value(send(message));
+    const after = room.store.getRoom(room.roomCode)!;
+    expect(after.match).toEqual({ ...before.match, status: "round-active", roundNumber: 2, dealerIndex: 0 });
+    expect(send(message)).toMatchObject({ ok: false, code: "DUPLICATE_COMMAND" });
+    expect(send({ ...message, revision: after.revision })).toMatchObject({ ok: false, code: "DUPLICATE_COMMAND" });
+    expect(send({ ...message, commandId: "competing-next" })).toMatchObject({ ok: false, code: "STALE_REVISION" });
+    expect(room.store.getRoom(room.roomCode)).toEqual(after);
+  });
+
+  test("ends the match at the target and preserves the final winner after departures", () => {
+    const hands = [winningHand, Array(7).fill("wild-reverse-draw-4"), Array(7).fill("wild-color-roulette"),
+      ["wild-reverse-draw-4", "wild-color-roulette", "wild-draw-6", "wild-draw-6", "wild-draw-6", "wild-draw-6", "wild-draw-10"]];
+    const room = game(hands);
+    value(room.play(0, "red-discard-all"));
+    const before = room.store.getRoom(room.roomCode)!;
+    const winnerId = room.seats[0]!.playerId;
+    expect(before.match).toMatchObject({
+      status: "match-complete", winner: winnerId, finalizedRoundNumber: 1,
+      scoresByPlayerId: { [winnerId]: 1050 }, lastRoundResult: { matchWinnerId: winnerId },
+    });
+    expect(room.command(0, { type: "start-next-round" })).toMatchObject({ ok: false, code: "match-complete" });
+    expect(room.command(1, { type: "start-next-round" })).toMatchObject({ ok: false, code: "NOT_HOST" });
+    expect(room.command(0, { type: "draw-and-pass" })).toMatchObject({ ok: false, code: "invalid-phase" });
+    expect(room.store.getRoom(room.roomCode)).toEqual(before);
+    value(room.command(0, { type: "leave-room" }));
+    expect(room.command(1, { type: "start-next-round" })).toMatchObject({ ok: false, code: "match-complete" });
+    expect(room.store.getRoom(room.roomCode)!.match).toEqual(before.match);
+  });
+
+  test.each(["leave", "expire"] as const)("%s between rounds transfers host, excludes that seat, and keeps historical points", (mode) => {
+    const room = game(scoringHands);
+    value(room.play(0, "red-discard-all"));
+    const completed = room.store.getRoom(room.roomCode)!.match;
+    if (mode === "leave") value(room.command(0, { type: "leave-room" }));
+    else {
+      room.store.disconnect(room.roomCode, room.seats[0]!.playerId, room.peers[0]!.id);
+      room.clock.advance(50_000);
+    }
+    expect(room.store.getRoom(room.roomCode)!.hostPlayerId).toBe(room.seats[1]!.playerId);
+    expect(room.store.getRoom(room.roomCode)!.match).toEqual(completed);
+    value(room.command(1, { type: "start-next-round" }));
+    const next = room.store.getRoom(room.roomCode)!;
+    expect(next.game!.players.map(({ id }) => id)).toEqual([room.seats[1]!.playerId, room.seats[2]!.playerId]);
+    expect(next.game!.players.map(({ hand }) => hand.length)).toEqual([7, 7]);
+    expect(next.match).toMatchObject({ scoresByPlayerId: { [room.seats[0]!.playerId]: 124 }, lastRoundResult: completed.lastRoundResult });
+  });
+
+  test.each(["leave", "expire"] as const)("%s during a round transfers next-round authority without awarding departure points", (mode) => {
+    const room = game([defaultHands[1]!, winningHand, defaultHands[2]!]);
+    if (mode === "leave") value(room.command(0, { type: "leave-room" }));
+    else {
+      room.store.disconnect(room.roomCode, room.seats[0]!.playerId, room.peers[0]!.id);
+      room.clock.advance(50_000);
+    }
+    expect(room.store.getRoom(room.roomCode)!.hostPlayerId).toBe(room.seats[1]!.playerId);
+    value(room.play(1, "red-discard-all"));
+    expect(room.store.getRoom(room.roomCode)!.match).toMatchObject({
+      status: "round-complete", scoresByPlayerId: { [room.seats[0]!.playerId]: 0, [room.seats[1]!.playerId]: 47 },
+      lastRoundResult: { breakdown: expect.arrayContaining([
+        { playerId: room.seats[1]!.playerId, cardPoints: 47, eliminationBonus: 0, roundPoints: 47, cumulativePoints: 47 },
+      ]) },
+    });
+    value(room.command(1, { type: "start-next-round" }));
+  });
+
+  test.each([
+    { departed: [0], dealer: 2, index: 1 }, { departed: [1], dealer: 2, index: 1 },
+    { departed: [2], dealer: 3, index: 2 }, { departed: [1, 2], dealer: 3, index: 1 },
+    { departed: [2, 3], dealer: 0, index: 0 },
+  ])("rotates to the next retained seat after departures $departed", ({ departed, dealer, index }) => {
+    const hands = [defaultHands[1]!, defaultHands[2]!, winningHand, defaultHands[3]!];
+    const room = game(hands, { random: dealRandom(hands, "red-5", 1) });
+    value(room.play(2, "red-discard-all"));
+    for (const seat of departed) value(room.command(seat, { type: "leave-room" }));
+    const retained = room.store.getRoom(room.roomCode)!;
+    const hostIndex = room.seats.findIndex(({ playerId }) => playerId === retained.hostPlayerId);
+    value(room.command(hostIndex, { type: "start-next-round" }));
+    const next = room.store.getRoom(room.roomCode)!;
+    expect(next.match).toMatchObject({ roundNumber: 2, dealerIndex: index });
+    expect(next.game!.players[index]!.id).toBe(room.seats[dealer]!.playerId);
+    expect(next.game!.currentPlayerId).toBe(next.game!.players[(index + 1) % next.game!.players.length]!.id);
+  });
+
+  test.each(["leave", "expire"] as const)("%s finalizes last-player victory exactly once and cannot deal to a single seat", (mode) => {
+    const room = game(defaultHands.slice(0, 2));
+    if (mode === "leave") value(room.command(1, { type: "leave-room" }));
+    else {
+      room.store.disconnect(room.roomCode, room.seats[1]!.playerId, room.peers[1]!.id);
+      room.clock.advance(50_000);
+    }
+    const before = room.store.getRoom(room.roomCode)!;
+    expect(before.match).toMatchObject({
+      status: "round-complete", finalizedRoundNumber: 1,
+      scoresByPlayerId: { [room.seats[0]!.playerId]: 0, [room.seats[1]!.playerId]: 0 },
+      lastRoundResult: { winnerId: room.seats[0]!.playerId },
+    });
+    expect(room.command(0, { type: "start-next-round" })).toMatchObject({ ok: false, code: "NOT_ENOUGH_PLAYERS" });
+    expect(room.store.getRoom(room.roomCode)).toEqual(before);
+  });
+
+  test("a failed next-round deal keeps the result, revision and command ID retryable", () => {
+    let fail = false;
+    let cards = 0;
+    const room = game(scoringHands, { cardIdFactory: () => {
+      if (fail) throw new Error("Private card factory failure");
+      return `card-${++cards}`;
+    } });
+    value(room.play(0, "red-discard-all"));
+    const before = room.store.getRoom(room.roomCode)!;
+    fail = true;
+    expect(room.command(0, { type: "start-next-round" }, "retry-deal")).toEqual({
+      ok: false, code: "INTERNAL_ERROR", message: "The request could not be completed.", revision: before.revision,
+    });
+    expect(room.store.getRoom(room.roomCode)).toEqual(before);
+    fail = false;
+    value(room.command(0, { type: "start-next-round" }, "retry-deal"));
+    expect(room.store.getRoom(room.roomCode)!.match).toEqual({ ...before.match, status: "round-active", roundNumber: 2, dealerIndex: 0 });
   });
 });
 

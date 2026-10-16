@@ -45,6 +45,7 @@ export interface RoomInspection {
   hostPlayerId: string;
   revision: number;
   players: { id: string; name: string; online: boolean; reconnectDeadline: number | null }[];
+  match: MatchState;
   game: GameState | null;
 }
 
