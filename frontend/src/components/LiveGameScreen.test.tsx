@@ -902,4 +902,98 @@ describe("LiveGameScreen", () => {
       expect(document.querySelector(".opponents-strip")).toBeInTheDocument();
     });
   });
+
+  describe("Step-by-step drawing & auto-throw", () => {
+    test("stages multi-card draw sequence and reveals one card per click until auto-throw", () => {
+      const onCommand = vi.fn();
+      const initialSnapshot = createGameSnapshot({
+        hand: [{ instanceId: "card-1", faceId: "red-5" }],
+        allowedControls: ["draw-until-playable"],
+        topDiscard: { instanceId: "d-prev", faceId: "blue-1" },
+      });
+
+      const { rerender } = render(
+        <LiveGameScreen onCommand={onCommand} onLeaveRoom={vi.fn()} snapshot={initialSnapshot} />
+      );
+
+      // Snapshot after server resolved draw-until-playable: 1 card drawn to hand, 1 card auto-thrown to discard
+      const drawSnapshot = createGameSnapshot({
+        hand: [
+          { instanceId: "card-1", faceId: "red-5" },
+          { instanceId: "card-draw-1", faceId: "green-7" },
+        ],
+        drawCount: 118,
+        allowedControls: [],
+        topDiscard: { instanceId: "card-draw-2", faceId: "blue-7" },
+      });
+
+      rerender(
+        <LiveGameScreen onCommand={onCommand} onLeaveRoom={vi.fn()} snapshot={drawSnapshot} />
+      );
+
+      // Draw pile prompts to click to draw
+      const drawButton = screen.getByRole("button", { name: /draw next|click to draw/i });
+      expect(drawButton).toBeInTheDocument();
+
+      const bottomSeat = document.querySelector(".player-seat--bottom")!;
+      const discardPile = document.querySelector(".pile--discard")!;
+
+      // Click to draw the hand card
+      fireEvent.click(drawButton);
+      expect(within(bottomSeat).getByRole("article", { name: /green 7/i })).toBeInTheDocument();
+
+      // Click to draw the final card which auto-throws to discard
+      fireEvent.click(drawButton);
+      expect(within(discardPile).getByRole("article", { name: /blue 7/i })).toBeInTheDocument();
+    });
+
+    test("Wild Color Roulette victim reveals drawn cards one-by-one until matching color is auto-thrown", () => {
+      const onCommand = vi.fn();
+      const initialSnapshot = createGameSnapshot({
+        hand: [{ instanceId: "card-1", faceId: "blue-2" }],
+        pendingChoice: { type: "choose-roulette-color", playerId: "p1" },
+        topDiscard: { instanceId: "d-roulette", faceId: "wild-color-roulette" },
+      });
+
+      const { rerender } = render(
+        <LiveGameScreen onCommand={onCommand} onLeaveRoom={vi.fn()} snapshot={initialSnapshot} />
+      );
+
+      // Snapshot after server resolved choose-roulette-color: 2 non-matching cards drawn, 1 matching red card auto-thrown
+      const rouletteSnapshot = createGameSnapshot({
+        hand: [
+          { instanceId: "card-1", faceId: "blue-2" },
+          { instanceId: "draw-r1", faceId: "yellow-3" },
+          { instanceId: "draw-r2", faceId: "green-4" },
+        ],
+        drawCount: 117,
+        activeColor: "red",
+        pendingChoice: null,
+        topDiscard: { instanceId: "draw-r3", faceId: "red-9" },
+      });
+
+      rerender(
+        <LiveGameScreen onCommand={onCommand} onLeaveRoom={vi.fn()} snapshot={rouletteSnapshot} />
+      );
+
+      const drawButton = screen.getByRole("button", { name: /draw next|click to draw/i });
+      expect(drawButton).toBeInTheDocument();
+
+      const bottomSeat = document.querySelector(".player-seat--bottom")!;
+      const discardPile = document.querySelector(".pile--discard")!;
+
+      // Card 1: yellow 3
+      fireEvent.click(drawButton);
+      expect(within(bottomSeat).getByRole("article", { name: /yellow 3/i })).toBeInTheDocument();
+      expect(within(bottomSeat).queryByRole("article", { name: /green 4/i })).not.toBeInTheDocument();
+
+      // Card 2: green 4
+      fireEvent.click(drawButton);
+      expect(within(bottomSeat).getByRole("article", { name: /green 4/i })).toBeInTheDocument();
+
+      // Card 3: matching red 9 auto-thrown to discard
+      fireEvent.click(drawButton);
+      expect(within(discardPile).getByRole("article", { name: /red 9/i })).toBeInTheDocument();
+    });
+  });
 });

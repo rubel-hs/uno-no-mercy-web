@@ -64,6 +64,8 @@ export function LiveGameScreen({
   const activeFlightsRef = useRef<FlightRequest[]>([]);
   const [hiddenCardInstanceId, setHiddenCardInstanceId] = useState<string | null>(null);
   const [hiddenCardIds, setHiddenCardIds] = useState<string[]>([]);
+  const [drawQueue, setDrawQueue] = useState<{ instanceId: string; faceId: string; isAutoThrow?: boolean }[]>([]);
+  const [revealedCount, setRevealedCount] = useState<number>(0);
   const stagedHandCardRef = useRef<{ instanceId: string; faceId: string; index: number } | null>(null);
   const playedCardRef = useRef<CardDefinition | null>(null);
   const snapshotRef = useRef<PlayerSnapshot>(snapshot);
@@ -78,6 +80,8 @@ export function LiveGameScreen({
     activeFlightsRef.current = [];
     setHiddenCardIds([]);
     setHiddenCardInstanceId(null);
+    setDrawQueue([]);
+    setRevealedCount(0);
     stagedHandCardRef.current = null;
     playedCardRef.current = null;
     if (snapshotRef.current.topDiscard) {
@@ -131,12 +135,19 @@ export function LiveGameScreen({
       if (snapshot.topDiscard) {
         setVisualTopDiscard(findCard(snapshot.topDiscard.faceId));
       }
+      setDrawQueue([]);
+      setRevealedCount(0);
       return;
     }
 
-    const prevDiscardId = prevSnapshot.topDiscard?.faceId;
-    const currentDiscardId = snapshot.topDiscard?.faceId;
-    const discardChanged = currentDiscardId && currentDiscardId !== prevDiscardId;
+    const prevDiscardId = prevSnapshot.topDiscard?.instanceId ?? prevSnapshot.topDiscard?.faceId;
+    const currentDiscardId = snapshot.topDiscard?.instanceId ?? snapshot.topDiscard?.faceId;
+    const prevDiscardFaceId = prevSnapshot.topDiscard?.faceId;
+    const currentDiscardFaceId = snapshot.topDiscard?.faceId;
+    const discardChanged = Boolean(
+      (currentDiscardId && currentDiscardId !== prevDiscardId) ||
+        (currentDiscardFaceId && currentDiscardFaceId !== prevDiscardFaceId),
+    );
 
     const isGameplay =
       prevSnapshot.phase === "playing" &&
@@ -146,6 +157,7 @@ export function LiveGameScreen({
       prevSnapshot.roundNumber === snapshot.roundNumber;
 
     const newFlights: FlightRequest[] = [];
+    let isStepDrawingActive = false;
 
     if (isGameplay) {
       if (discardChanged) {
@@ -156,8 +168,8 @@ export function LiveGameScreen({
           const cardCountDecreased =
             prevOpponent && currentOpponent && currentOpponent.cardCount < prevOpponent.cardCount;
 
-          if (cardCountDecreased) {
-            const cardToFly = findCard(currentDiscardId);
+          if (cardCountDecreased && currentDiscardFaceId) {
+            const cardToFly = findCard(currentDiscardFaceId);
             const opponentSeatEl =
               document.querySelector(`[data-player-id="${prevActiveId}"]`) ||
               document.querySelector(`.player-seat[aria-label*="${prevOpponent.name}"]`);
@@ -197,12 +209,48 @@ export function LiveGameScreen({
         }
       }
 
-      // Local player draw flights
+      // Local player draw flights & step draw queue
       const didDrawFromDeck = snapshot.drawCount < prevSnapshot.drawCount;
       const prevHandIds = new Set(prevSnapshot.hand.map((h) => h.instanceId));
       const newlyDrawnCards = snapshot.hand.filter((h) => !prevHandIds.has(h.instanceId));
+      const isViewerActing =
+        prevSnapshot.currentPlayerId === snapshot.viewerId ||
+        prevSnapshot.pendingChoice?.playerId === snapshot.viewerId;
 
-      if (didDrawFromDeck && newlyDrawnCards.length > 0) {
+      const isMercyEliminated =
+        !prevSnapshot.players.find((p) => p.id === snapshot.viewerId)?.eliminated &&
+        Boolean(snapshot.players.find((p) => p.id === snapshot.viewerId)?.eliminated);
+
+      const isStepDraw =
+        isViewerActing &&
+        didDrawFromDeck &&
+        (discardChanged || isMercyEliminated) &&
+        (prevSnapshot.allowedControls.includes("draw-until-playable") ||
+          prevSnapshot.pendingChoice?.type === "choose-roulette-color");
+
+      if (isStepDraw) {
+        const queue: { instanceId: string; faceId: string; isAutoThrow?: boolean }[] =
+          newlyDrawnCards.map((c) => ({
+            instanceId: c.instanceId,
+            faceId: c.faceId,
+            isAutoThrow: false,
+          }));
+        if (discardChanged && snapshot.topDiscard) {
+          queue.push({
+            instanceId: snapshot.topDiscard.instanceId ?? snapshot.topDiscard.faceId,
+            faceId: snapshot.topDiscard.faceId,
+            isAutoThrow: true,
+          });
+        }
+        if (queue.length > 0) {
+          isStepDrawingActive = true;
+          setDrawQueue(queue);
+          setRevealedCount(0);
+          if (prevSnapshot.topDiscard) {
+            setVisualTopDiscard(findCard(prevSnapshot.topDiscard.faceId));
+          }
+        }
+      } else if (didDrawFromDeck && newlyDrawnCards.length > 0) {
         const newCardIds = newlyDrawnCards.map((c) => c.instanceId);
         setHiddenCardIds((prev) => [...prev, ...newCardIds]);
 
@@ -308,7 +356,7 @@ export function LiveGameScreen({
       newFlights.some(
         (f) => f.id.startsWith("flight-play-") || f.id.startsWith("flight-opponent-"),
       );
-    if (!hasDiscardFlight) {
+    if (!hasDiscardFlight && !isStepDrawingActive && drawQueue.length === 0) {
       setVisualTopDiscard(snapshot.topDiscard ? findCard(snapshot.topDiscard.faceId) : null);
     }
   }, [snapshot, flightDuration]);
@@ -347,7 +395,7 @@ export function LiveGameScreen({
   }
 
   const handlePlayCard = (cardId: string) => {
-    if (isReconnecting || !snapshot.legalCardIds.includes(cardId)) {
+    if (isReconnecting || drawQueue.length > 0 || !snapshot.legalCardIds.includes(cardId)) {
       return;
     }
 
@@ -399,7 +447,88 @@ export function LiveGameScreen({
     onCommand({ type: "play-card", cardId });
   };
 
-  const renderedHand = [...snapshot.hand];
+  const handleDrawPileClick = () => {
+    if (isReconnecting) return;
+
+    if (drawQueue.length > 0 && revealedCount < drawQueue.length) {
+      const currentItem = drawQueue[revealedCount];
+      const nextRevealedCount = revealedCount + 1;
+      setRevealedCount(nextRevealedCount);
+
+      const cardDef = findCard(currentItem.faceId);
+      const drawFromRect = getElementCoordinates(drawPileRef.current, {
+        x: 250,
+        y: 300,
+        width: 80,
+        height: 120,
+      });
+
+      if (currentItem.isAutoThrow) {
+        const toRect = getElementCoordinates(discardPileRef.current, {
+          x: 400,
+          y: 300,
+          width: 80,
+          height: 120,
+        });
+
+        const flightId = `flight-autothrow-${currentItem.instanceId}-${Date.now()}`;
+        setActiveFlights((prev) => [
+          ...prev,
+          {
+            id: flightId,
+            card: cardDef,
+            fromRect: drawFromRect,
+            toRect,
+            duration: flightDuration,
+          },
+        ]);
+        setVisualTopDiscard(cardDef);
+        setDrawQueue([]);
+        setRevealedCount(0);
+      } else {
+        const bottomHandEl = document.querySelector(".player-seat--bottom .player-seat__hand");
+        const handRect = getElementCoordinates(bottomHandEl, {
+          x: 300,
+          y: 600,
+          width: 400,
+          height: 120,
+        });
+
+        const flightId = `flight-draw-step-${currentItem.instanceId}-${Date.now()}`;
+        setActiveFlights((prev) => [
+          ...prev,
+          {
+            id: flightId,
+            card: cardDef,
+            fromRect: drawFromRect,
+            toRect: handRect,
+            duration: flightDuration,
+          },
+        ]);
+
+        if (nextRevealedCount >= drawQueue.length) {
+          setDrawQueue([]);
+          setRevealedCount(0);
+        }
+      }
+      return;
+    }
+
+    if (canDraw) {
+      flushFlights();
+      onCommand({ type: drawAndPass ? "draw-and-pass" : "draw-until-playable" });
+    }
+  };
+
+  const unrevealedHandIds = new Set(
+    drawQueue
+      .slice(revealedCount)
+      .filter((item) => !item.isAutoThrow)
+      .map((item) => item.instanceId),
+  );
+  const visibleViewerHand = snapshot.hand.filter((h) => !unrevealedHandIds.has(h.instanceId));
+
+  const renderedHand = [...visibleViewerHand];
   if (
     hiddenCardInstanceId &&
     stagedHandCardRef.current &&
@@ -456,12 +585,12 @@ export function LiveGameScreen({
           active={snapshot.currentPlayerId === viewer.id}
           cardIds={renderedHand.map((h) => h.instanceId)}
           cards={renderedHand.map((h) => findCard(h.faceId))}
-          count={viewer.cardCount}
+          count={drawQueue.length > 0 ? renderedHand.length : viewer.cardCount}
           disabled={isReconnecting}
           eliminated={viewer.eliminated}
           hiddenCardInstanceId={hiddenCardInstanceId}
           hiddenCardIds={hiddenCardIds}
-          legalCardIds={snapshot.legalCardIds}
+          legalCardIds={drawQueue.length > 0 ? [] : snapshot.legalCardIds}
           name={viewer.name}
           online={viewer.online}
           onPlayCard={handlePlayCard}
@@ -477,19 +606,29 @@ export function LiveGameScreen({
         <div className="play-zone">
           <button
             ref={drawPileRef}
-            aria-label={drawAndPass ? "Draw one card and pass" : "Draw cards from draw pile"}
-            className="pile pile--draw"
-            disabled={!canDraw || isReconnecting}
-            onClick={() => {
-              if (canDraw && !isReconnecting) {
-                flushFlights();
-                onCommand({ type: drawAndPass ? "draw-and-pass" : "draw-until-playable" });
-              }
-            }}
+            aria-label={
+              drawQueue.length > 0
+                ? "Click to draw next card"
+                : drawAndPass
+                  ? "Draw one card and pass"
+                  : "Draw cards from draw pile"
+            }
+            className={`pile pile--draw ${drawQueue.length > 0 ? "is-drawing-active" : ""}`}
+            disabled={(!canDraw && drawQueue.length === 0) || isReconnecting}
+            onClick={handleDrawPileClick}
             type="button"
           >
-            <span className="pile__count">{snapshot.drawCount}</span>
+            <span className="pile__count">
+              {drawQueue.length > 0
+                ? snapshot.drawCount + (drawQueue.length - revealedCount)
+                : snapshot.drawCount}
+            </span>
             <GameCard card={cardBack} size="large" />
+            {drawQueue.length > 0 && (
+              <span className="pile__draw-prompt" aria-hidden="true">
+                Click to draw
+              </span>
+            )}
           </button>
 
           <div className="pile pile--discard" ref={discardPileRef}>
