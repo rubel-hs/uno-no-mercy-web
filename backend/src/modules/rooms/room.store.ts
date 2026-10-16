@@ -171,7 +171,8 @@ export function createRoomStore(overrides: Partial<RoomStoreDeps> = {}): RoomSto
 
   function eliminate(room: Room, playerId: string): void {
     const state = room.game!;
-    state.players = state.players.map((player) => player.id === playerId ? { ...player, hand: [], eliminated: true, eliminatedByPlayerId: null } : player);
+    // Departures create no gameplay cause and preserve any earlier Mercy attribution.
+    state.players = state.players.map((player) => player.id === playerId ? { ...player, hand: [], eliminated: true } : player);
     if (state.unoWindow?.playerId === playerId) state.unoWindow = null;
     if (state.phase === "finished") return; // A completed game's winner is historical.
     const active = state.players.filter(({ eliminated }) => !eliminated);

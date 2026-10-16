@@ -337,6 +337,37 @@ describe("command ordering and private views", () => {
 });
 
 describe("disconnect, reconnect and cleanup", () => {
+  // Break caught: removing a Mercy-eliminated seat erases the gameplay cause before round scoring.
+  test.each(["leave", "expire"] as const)("%s preserves an earlier gameplay Mercy cause through round completion", (mode) => {
+    const hands = defaultHands.slice(0, 3).map((hand) => [...hand]);
+    hands[0]![0] = "wild-draw-10";
+    hands[1]![0] = "wild-draw-10";
+    const room = game(hands);
+    value(room.play(0, "wild-draw-10"));
+    value(room.command(0, { type: "choose-color", color: "red" }));
+    value(room.play(1, "wild-draw-10"));
+    value(room.command(1, { type: "choose-color", color: "blue" }));
+    value(room.command(2, { type: "accept-draw" }));
+    const eliminatedId = room.seats[2]!.playerId;
+    expect(room.state().players[2]).toMatchObject({ eliminated: true, hand: [], eliminatedByPlayerId: eliminatedId });
+    expect(room.state().phase).toBe("playing");
+
+    if (mode === "leave") value(room.command(2, { type: "leave-room" }));
+    else {
+      room.store.disconnect(room.roomCode, eliminatedId, room.peers[2]!.id);
+      room.clock.advance(50_000);
+    }
+    expect(room.store.getRoom(room.roomCode)!.players.map(({ id }) => id)).not.toContain(eliminatedId);
+    expect(room.state().players[2]).toMatchObject({ eliminated: true, hand: [], eliminatedByPlayerId: eliminatedId });
+    expect(room.state().phase).toBe("playing");
+
+    // An ordinary departure ends the round without gaining a new gameplay cause.
+    value(room.command(1, { type: "leave-room" }));
+    expect(room.state()).toMatchObject({ phase: "finished", winner: room.seats[0]!.playerId });
+    expect(room.state().players[1]).toMatchObject({ eliminated: true, eliminatedByPlayerId: null });
+    expect(room.state().players[2]).toMatchObject({ eliminated: true, hand: [], eliminatedByPlayerId: eliminatedId });
+  });
+
   test("disconnect preserves the full hand and eligibility until exactly 50,000ms", () => {
     const room = game();
     const hand = room.state().players[0]!.hand;
@@ -476,7 +507,7 @@ describe("disconnect, reconnect and cleanup", () => {
       room.clock.advance(50_000);
     }
     expect(room.state()).toMatchObject({ phase: "finished", winner: room.seats[1]!.playerId, pendingChoice: null, drawStack: null });
-    expect(room.state().players[0]).toMatchObject({ eliminated: true, hand: [] });
+    expect(room.state().players[0]).toMatchObject({ eliminated: true, hand: [], eliminatedByPlayerId: null });
     room.store.disconnect(room.roomCode, room.seats[1]!.playerId, room.peers[1]!.id);
     room.clock.advance(49_999);
     expect(room.store.getRoom(room.roomCode)).not.toBeNull();
