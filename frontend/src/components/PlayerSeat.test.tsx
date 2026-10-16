@@ -107,5 +107,20 @@ describe("Name strip card count badge", () => {
     expect(badge).toHaveClass("is-danger");
     expect(badge.textContent).toContain("⚠️");
   });
+
+  it("renders opponent card count badge for non-bottom seats", () => {
+    render(
+      <PlayerSeat
+        count={9}
+        name="Dex"
+        orientation="vertical"
+        points={40}
+        position="left"
+      />
+    );
+    const badge = screen.getByLabelText("9 cards");
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveTextContent("9");
+  });
 });
 

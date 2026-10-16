@@ -433,20 +433,22 @@ export function LiveGameScreen({
       <div className="table-scar table-scar--two" aria-hidden="true" />
 
       {/* Opponent Seats */}
-      {opponents.map(({ player, position, orientation }) => (
-        <PlayerSeat
-          active={snapshot.currentPlayerId === player.id}
-          count={player.cardCount}
-          eliminated={player.eliminated}
-          key={player.id}
-          name={player.name}
-          online={player.online}
-          orientation={orientation}
-          playerId={player.id}
-          points={snapshot.scores.find((score) => score.playerId === player.id)?.points ?? 0}
-          position={position}
-        />
-      ))}
+      <div className="opponents-strip" aria-label="Opponent players" role="region">
+        {opponents.map(({ player, position, orientation }) => (
+          <PlayerSeat
+            active={snapshot.currentPlayerId === player.id}
+            count={player.cardCount}
+            eliminated={player.eliminated}
+            key={player.id}
+            name={player.name}
+            online={player.online}
+            orientation={orientation}
+            playerId={player.id}
+            points={snapshot.scores.find((score) => score.playerId === player.id)?.points ?? 0}
+            position={position}
+          />
+        ))}
+      </div>
 
       {/* Viewer Seat (Always placed at bottom) */}
       {viewer && (

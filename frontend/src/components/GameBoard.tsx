@@ -35,9 +35,11 @@ export function GameBoard({ direction = "clockwise", stackedCards = [] }: GameBo
       <div className="table-scar table-scar--one" aria-hidden="true" />
       <div className="table-scar table-scar--two" aria-hidden="true" />
 
-      <PlayerSeat count={7} name="Maya" orientation="horizontal" points={0} position="top" />
-      <PlayerSeat count={9} name="Dex" orientation="vertical" points={0} position="left" />
-      <PlayerSeat count={6} name="Nova" orientation="vertical" points={0} position="right" />
+      <div className="opponents-strip" aria-label="Opponent players" role="region">
+        <PlayerSeat count={7} name="Maya" orientation="horizontal" points={0} position="top" />
+        <PlayerSeat count={9} name="Dex" orientation="vertical" points={0} position="left" />
+        <PlayerSeat count={6} name="Nova" orientation="vertical" points={0} position="right" />
+      </div>
       <PlayerSeat active cards={playerHand} count={playerHand.length} name="You" orientation="horizontal" points={0} position="bottom" />
 
       <div className="table-center">

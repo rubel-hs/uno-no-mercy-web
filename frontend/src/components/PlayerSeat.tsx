@@ -63,7 +63,7 @@ export function PlayerSeat({
         isActualActive ? "is-active" : ""
       } ${eliminated ? "is-eliminated" : ""} ${!online ? "is-offline" : ""}`}
       data-player-id={playerId}
-      aria-label={`${name}, ${count} cards, ${points} points${isActualActive ? ", current player" : ""}${
+      aria-label={`${name}, ${points} points${isActualActive ? ", current player" : ""}${
         eliminated ? ", eliminated" : ""
       }${!online ? ", offline" : ""}`}
     >
@@ -80,6 +80,12 @@ export function PlayerSeat({
           {eliminated && <span className="player-seat__status-tag">Eliminated</span>}
           {!online && !eliminated && <span className="player-seat__status-tag">Offline</span>}
         </span>
+        {position !== "bottom" && (
+          <span className="player-seat__card-count" aria-label={`${count} cards`} title={`${count} cards in hand`}>
+            <span className="player-seat__card-count-icon" aria-hidden="true">🂠</span>
+            <b>{count}</b>
+          </span>
+        )}
         <span className="player-seat__score" title="Cumulative points">
           {points}<i aria-hidden="true">★</i>
         </span>

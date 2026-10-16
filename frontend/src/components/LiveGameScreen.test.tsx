@@ -890,5 +890,16 @@ describe("LiveGameScreen", () => {
       const bobSeat = screen.getByText("Bob").closest(".player-seat");
       expect(bobSeat).not.toHaveClass("is-active");
     });
+
+    test("wraps opponent seats within an opponents-strip container", () => {
+      render(
+        <LiveGameScreen
+          onCommand={vi.fn()}
+          onLeaveRoom={vi.fn()}
+          snapshot={createGameSnapshot()}
+        />,
+      );
+      expect(document.querySelector(".opponents-strip")).toBeInTheDocument();
+    });
   });
 });
