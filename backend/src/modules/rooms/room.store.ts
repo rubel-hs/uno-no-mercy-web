@@ -57,6 +57,7 @@ function failure(code: CommandErrorCode, revision?: number): RoomResult<never> {
     INVALID_NAME: "Enter a name between 1 and 24 characters.", DUPLICATE_NAME: "That name is already in use.",
     INVALID_TOKEN: "The player session is invalid or expired.", PLAYER_NOT_FOUND: "The player is no longer in this room.",
     NOT_HOST: "Only the host can start the game.", NOT_ENOUGH_PLAYERS: "At least two players are required.",
+    "round-not-complete": "The current round is not complete.", "match-complete": "The match is complete.",
     STALE_REVISION: "The room changed. Use the latest snapshot.", DUPLICATE_COMMAND: "This command was already accepted.",
     INVALID_MESSAGE: "Invalid command message.", INTERNAL_ERROR: "The request could not be completed.",
   };
@@ -170,7 +171,7 @@ export function createRoomStore(overrides: Partial<RoomStoreDeps> = {}): RoomSto
 
   function eliminate(room: Room, playerId: string): void {
     const state = room.game!;
-    state.players = state.players.map((player) => player.id === playerId ? { ...player, hand: [], eliminated: true } : player);
+    state.players = state.players.map((player) => player.id === playerId ? { ...player, hand: [], eliminated: true, eliminatedByPlayerId: null } : player);
     if (state.unoWindow?.playerId === playerId) state.unoWindow = null;
     if (state.phase === "finished") return; // A completed game's winner is historical.
     const active = state.players.filter(({ eliminated }) => !eliminated);
@@ -342,6 +343,9 @@ export function createRoomStore(overrides: Partial<RoomStoreDeps> = {}): RoomSto
           room.game = createGameState({ playerIds: [...room.seats.keys()], deck, dealerIndex: Math.floor(deps.random() * room.seats.size) });
           room.game.players = room.game.players.map((player) => ({ ...player, name: room.seats.get(player.id)!.name }));
         } catch { return failure("INTERNAL_ERROR", room.revision); }
+      } else if (command.type === "start-next-round") {
+        if (room.hostPlayerId !== playerId) return failure("NOT_HOST", room.revision);
+        return failure("round-not-complete", room.revision);
       } else if (command.type === "leave-room") {
         removeSeat(room, seat);
       } else {

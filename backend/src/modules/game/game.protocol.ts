@@ -101,7 +101,7 @@ export interface PlayerSnapshot {
   winner: string | null;
   legalCardIds: string[];
   allowedControls: ClientCommand["type"][];
-  /** Public match data; optional while older room snapshots are projected without a match. */
+  /** Public match metadata, never private room data. Optional until room projection populates match state. */
   matchStatus?: MatchStatus;
   roundNumber?: number;
   targetScore?: 1000;

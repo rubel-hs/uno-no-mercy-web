@@ -24,7 +24,7 @@ export function createGameState(input: CreateGameInput): GameState {
   }
   input.deck.forEach(faceOf);
   const drawPile = input.deck.map((card) => ({ ...card }));
-  const players = playerIds.map((id) => ({ id, hand: [] as PhysicalCard[], eliminated: false }));
+  const players = playerIds.map((id) => ({ id, hand: [] as PhysicalCard[], eliminated: false, eliminatedByPlayerId: null }));
   for (let round = 0; round < 7; round++) {
     for (let offset = 1; offset <= players.length; offset++) {
       const card = drawPile.shift();

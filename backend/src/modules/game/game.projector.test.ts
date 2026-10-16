@@ -7,9 +7,9 @@ import type { GameState } from "./game.types";
 function fixture(): GameState {
   return {
     players: [
-      { id: "a", name: "Alice", online: true, eliminated: false, hand: [{ instanceId: "own-red", faceId: "red-3" }, { instanceId: "own-blue", faceId: "blue-2" }] },
-      { id: "b", name: "Bob", online: false, eliminated: false, hand: [{ instanceId: "opponent-secret", faceId: "yellow-9" }] },
-      { id: "c", name: "Carol", online: true, eliminated: true, hand: [] },
+      { id: "a", name: "Alice", online: true, eliminated: false, eliminatedByPlayerId: null, hand: [{ instanceId: "own-red", faceId: "red-3" }, { instanceId: "own-blue", faceId: "blue-2" }] },
+      { id: "b", name: "Bob", online: false, eliminated: false, eliminatedByPlayerId: null, hand: [{ instanceId: "opponent-secret", faceId: "yellow-9" }] },
+      { id: "c", name: "Carol", online: true, eliminated: true, eliminatedByPlayerId: null, hand: [] },
     ],
     drawPile: [{ instanceId: "draw-secret", faceId: "green-8" }],
     discardPile: [{ instanceId: "buried-secret", faceId: "green-4" }, { instanceId: "top", faceId: "red-5" }],

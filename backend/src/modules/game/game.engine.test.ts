@@ -10,9 +10,9 @@ const handOf = (state: GameState, id: string) => state.players.find((player) => 
 function fixture(overrides: Partial<GameState> = {}): GameState {
   return {
     players: [
-      { id: "a", hand: [card("red", "red-3"), card("number", "blue-5"), card("bad", "green-2")], eliminated: false },
-      { id: "b", hand: [card("b1", "yellow-1")], eliminated: false },
-      { id: "c", hand: [card("c1", "blue-1")], eliminated: false },
+      { id: "a", hand: [card("red", "red-3"), card("number", "blue-5"), card("bad", "green-2")], eliminated: false, eliminatedByPlayerId: null },
+      { id: "b", hand: [card("b1", "yellow-1")], eliminated: false, eliminatedByPlayerId: null },
+      { id: "c", hand: [card("c1", "blue-1")], eliminated: false, eliminatedByPlayerId: null },
     ],
     drawPile: [card("draw", "red-8")],
     discardPile: [card("top", "red-5")],
@@ -187,7 +187,7 @@ describe("normal turns", () => {
 function actionFixture(faceId: string, count = 3): GameState {
   const state = fixture();
   state.players = ["a", "b", "c", "d", "e", "f"].slice(0, count).map((id) => ({
-    id, hand: [card(`${id}-keep`, "blue-1")], eliminated: false,
+    id, hand: [card(`${id}-keep`, "blue-1")], eliminated: false, eliminatedByPlayerId: null,
   }));
   state.players[0]!.hand.unshift(card("action", faceId));
   state.drawPile = Array.from({ length: 24 }, (_, i) => card(`penalty-${i}`, "green-2"));

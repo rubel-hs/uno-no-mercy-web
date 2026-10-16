@@ -15,6 +15,8 @@ const rejectionMessages: Record<CommandErrorCode, string> = {
   NOT_AUTHENTICATED: "Authenticate before sending commands.",
   NOT_HOST: "Only the host can start the game.",
   NOT_ENOUGH_PLAYERS: "At least two players are required.",
+  "round-not-complete": "The current round is not complete.",
+  "match-complete": "The match is complete.",
   PLAYER_NOT_FOUND: "The player is no longer in this room.",
   STALE_REVISION: "The room changed. Use the latest snapshot.",
   DUPLICATE_COMMAND: "This command was already accepted.",
