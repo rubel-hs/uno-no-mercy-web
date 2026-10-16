@@ -11,6 +11,7 @@ type GameCardProps = {
   size?: "small" | "medium" | "large";
   onClick?: () => void;
   disabled?: boolean;
+  "data-card-instance-id"?: string;
 };
 
 const cardArtwork = import.meta.glob(
@@ -32,6 +33,7 @@ export function GameCard({
   size = "medium",
   onClick,
   disabled = false,
+  "data-card-instance-id": dataCardInstanceId,
 }: GameCardProps) {
   const artworkUrl = cardArtwork[`../assets/cards/${card.assetFile}`];
   const style: CSSProperties & { "--card-tone": string } = {
@@ -47,6 +49,7 @@ export function GameCard({
       className={`game-card game-card--${size} game-card--${card.color} game-card--${card.kind} ${
         disabled ? "is-disabled" : ""
       } ${className}`}
+      data-card-instance-id={dataCardInstanceId}
       onClick={disabled ? undefined : onClick}
       style={style}
     >

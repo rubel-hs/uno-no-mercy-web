@@ -68,6 +68,7 @@ export function PlayerSeat({
               className={`player-seat__card ${
                 position === "bottom" && !isLegal ? "is-disabled" : ""
               }`}
+              data-card-instance-id={instanceId}
               disabled={position === "bottom" && !isPlayable}
               key={`${name}-${card.id}-${index}`}
               onClick={() => {
