@@ -65,3 +65,47 @@ describe("Dynamic card squashing", () => {
     expect(hand.style.getPropertyValue("--dynamic-overlap")).toMatch(/^-?\d+px$/);
   });
 });
+
+describe("Name strip card count badge", () => {
+  it("renders standard count badge when player has fewer than 20 cards", () => {
+    const card = findCard("blue-0");
+    render(
+      <PlayerSeat
+        active
+        cardIds={["c1"]}
+        cards={[card]}
+        count={5}
+        name="Rubel"
+        orientation="horizontal"
+        points={10}
+        position="bottom"
+      />
+    );
+    const badge = screen.getByText(/5 \/ 25 CARDS/i);
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveClass("player-seat__count-badge");
+    expect(badge).not.toHaveClass("is-danger");
+  });
+
+  it("renders hazard badge with warning icon when player has 20 or more cards", () => {
+    const card = findCard("blue-0");
+    render(
+      <PlayerSeat
+        active
+        cardIds={["c1"]}
+        cards={[card]}
+        count={21}
+        name="Opponent"
+        orientation="horizontal"
+        points={10}
+        position="top"
+      />
+    );
+    const badge = screen.getByText(/21 \/ 25/i);
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveClass("player-seat__count-badge");
+    expect(badge).toHaveClass("is-danger");
+    expect(badge.textContent).toContain("⚠️");
+  });
+});
+

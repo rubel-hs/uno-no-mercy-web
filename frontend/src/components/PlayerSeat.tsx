@@ -63,13 +63,19 @@ export function PlayerSeat({
         isActualActive ? "is-active" : ""
       } ${eliminated ? "is-eliminated" : ""} ${!online ? "is-offline" : ""}`}
       data-player-id={playerId}
-      aria-label={`${name}, ${points} points${isActualActive ? ", current player" : ""}${
+      aria-label={`${name}, ${count} cards, ${points} points${isActualActive ? ", current player" : ""}${
         eliminated ? ", eliminated" : ""
       }${!online ? ", offline" : ""}`}
     >
       <div className="player-seat__meta">
         <span className="player-seat__identity">
           <b>{name}</b>
+          <span
+            className={`player-seat__count-badge ${count >= 20 ? "is-danger" : ""}`}
+            title={`Card count: ${count} of 25 (Mercy elimination)`}
+          >
+            {count >= 20 ? "⚠️" : "🂠"} {count} / 25{position === "bottom" ? " CARDS" : ""}
+          </span>
           {isActualActive && <small>Current player</small>}
           {eliminated && <span className="player-seat__status-tag">Eliminated</span>}
           {!online && !eliminated && <span className="player-seat__status-tag">Offline</span>}
