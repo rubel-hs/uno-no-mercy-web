@@ -1,8 +1,10 @@
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 
 import directionIcon from "../assets/icons/game_direction.png";
-import { cardBack, findCard } from "../game/cards";
+import { cardBack, findCard, type CardDefinition } from "../game/cards";
 import type { CardColor, ClientCommand, PlayerSnapshot } from "../game/protocol";
+import { CardFlightOverlay, type FlightRequest } from "./CardFlightOverlay";
 import { GameCard } from "./GameCard";
 import { GameChoiceDialog } from "./GameChoiceDialog";
 import { MatchResultScreen } from "./MatchResultScreen";
@@ -12,8 +14,28 @@ export interface LiveGameScreenProps {
   snapshot: PlayerSnapshot;
   connectionState?: string;
   reconnectAttempt?: number;
+  flightDuration?: number;
   onCommand: (command: ClientCommand) => void;
   onLeaveRoom: () => void;
+}
+
+const DEFAULT_FLIGHT_DURATION = 0.28;
+
+function getElementCoordinates(
+  element: Element | null,
+  fallback: { x: number; y: number; width: number; height: number },
+): { x: number; y: number; width: number; height: number } {
+  if (!element) return fallback;
+  const rect = element.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) {
+    return fallback;
+  }
+  return {
+    x: rect.x ?? rect.left ?? fallback.x,
+    y: rect.y ?? rect.top ?? fallback.y,
+    width: rect.width || fallback.width,
+    height: rect.height || fallback.height,
+  };
 }
 
 const SEAT_LAYOUTS: Record<number, ("top" | "left" | "right" | "top-left" | "top-right")[]> = {
@@ -28,10 +50,117 @@ export function LiveGameScreen({
   snapshot,
   connectionState = "connected",
   reconnectAttempt = 1,
+  flightDuration = DEFAULT_FLIGHT_DURATION,
   onCommand,
   onLeaveRoom,
 }: LiveGameScreenProps) {
   const isReconnecting = connectionState === "reconnecting";
+
+  const discardPileRef = useRef<HTMLDivElement | null>(null);
+  const [activeFlights, setActiveFlights] = useState<FlightRequest[]>([]);
+  const activeFlightsRef = useRef<FlightRequest[]>([]);
+  const [hiddenCardInstanceId, setHiddenCardInstanceId] = useState<string | null>(null);
+  const stagedHandCardRef = useRef<{ instanceId: string; faceId: string; index: number } | null>(null);
+  const playedCardRef = useRef<CardDefinition | null>(null);
+  const snapshotRef = useRef<PlayerSnapshot>(snapshot);
+  const prevSnapshotRef = useRef<PlayerSnapshot | null>(null);
+
+  const [visualTopDiscard, setVisualTopDiscard] = useState<CardDefinition | null>(() =>
+    snapshot.topDiscard ? findCard(snapshot.topDiscard.faceId) : null,
+  );
+
+  const handleFlightEnd = useCallback((flightId: string) => {
+    setActiveFlights((prev) => {
+      const next = prev.filter((f) => f.id !== flightId);
+      activeFlightsRef.current = next;
+      const remainingDiscardFlight = next.some(
+        (f) => f.id.startsWith("flight-play-") || f.id.startsWith("flight-opponent-"),
+      );
+      if (!remainingDiscardFlight) {
+        if (snapshotRef.current.topDiscard) {
+          setVisualTopDiscard(findCard(snapshotRef.current.topDiscard.faceId));
+        } else if (playedCardRef.current) {
+          setVisualTopDiscard(playedCardRef.current);
+        }
+      }
+      return next;
+    });
+
+    if (flightId.startsWith("flight-play-")) {
+      setHiddenCardInstanceId(null);
+      stagedHandCardRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    snapshotRef.current = snapshot;
+    const prevSnapshot = prevSnapshotRef.current;
+    prevSnapshotRef.current = snapshot;
+
+    if (!prevSnapshot) {
+      if (snapshot.topDiscard) {
+        setVisualTopDiscard(findCard(snapshot.topDiscard.faceId));
+      }
+      return;
+    }
+
+    const prevDiscardId = prevSnapshot.topDiscard?.faceId;
+    const currentDiscardId = snapshot.topDiscard?.faceId;
+    const discardChanged = currentDiscardId && currentDiscardId !== prevDiscardId;
+
+    if (discardChanged) {
+      const prevActiveId = prevSnapshot.currentPlayerId;
+      if (prevActiveId && prevActiveId !== snapshot.viewerId) {
+        const prevOpponent = prevSnapshot.players.find((p) => p.id === prevActiveId);
+        const currentOpponent = snapshot.players.find((p) => p.id === prevActiveId);
+        const cardCountDecreased =
+          prevOpponent && currentOpponent && currentOpponent.cardCount < prevOpponent.cardCount;
+
+        if (cardCountDecreased) {
+          const cardToFly = findCard(currentDiscardId);
+          const opponentSeatEl =
+            document.querySelector(`[data-player-id="${prevActiveId}"]`) ||
+            document.querySelector(`.player-seat[aria-label*="${prevOpponent.name}"]`);
+
+          const fromRect = getElementCoordinates(opponentSeatEl, {
+            x: 300,
+            y: 100,
+            width: 80,
+            height: 120,
+          });
+          const toRect = getElementCoordinates(discardPileRef.current, {
+            x: 400,
+            y: 300,
+            width: 80,
+            height: 120,
+          });
+
+          const flightId = `flight-opponent-${prevActiveId}-${Date.now()}`;
+          const newFlight: FlightRequest = {
+            id: flightId,
+            card: cardToFly,
+            fromRect,
+            toRect,
+            duration: flightDuration,
+          };
+
+          setActiveFlights((prev) => {
+            const next = [...prev, newFlight];
+            activeFlightsRef.current = next;
+            return next;
+          });
+          return;
+        }
+      }
+    }
+
+    const hasDiscardFlight = activeFlightsRef.current.some(
+      (f) => f.id.startsWith("flight-play-") || f.id.startsWith("flight-opponent-"),
+    );
+    if (!hasDiscardFlight) {
+      setVisualTopDiscard(snapshot.topDiscard ? findCard(snapshot.topDiscard.faceId) : null);
+    }
+  }, [snapshot, flightDuration]);
 
   if (snapshot.matchStatus === "round-complete" || snapshot.matchStatus === "match-complete") {
     return (
@@ -66,7 +195,70 @@ export function LiveGameScreen({
     opponents.push({ player, position, orientation });
   }
 
-  const topCard = snapshot.topDiscard ? findCard(snapshot.topDiscard.faceId) : null;
+  const handlePlayCard = (cardId: string) => {
+    if (isReconnecting || !snapshot.legalCardIds.includes(cardId)) {
+      return;
+    }
+
+    const playedCardItem = snapshot.hand.find((h) => h.instanceId === cardId);
+    const cardIndex = snapshot.hand.findIndex((h) => h.instanceId === cardId);
+
+    if (playedCardItem) {
+      const cardDef = findCard(playedCardItem.faceId);
+      stagedHandCardRef.current = {
+        instanceId: cardId,
+        faceId: playedCardItem.faceId,
+        index: cardIndex >= 0 ? cardIndex : 0,
+      };
+      playedCardRef.current = cardDef;
+      setHiddenCardInstanceId(cardId);
+
+      const cardElement = document.querySelector(`[data-card-instance-id="${cardId}"]`);
+      const fromRect = getElementCoordinates(cardElement, {
+        x: 300,
+        y: 600,
+        width: 80,
+        height: 120,
+      });
+      const toRect = getElementCoordinates(discardPileRef.current, {
+        x: 400,
+        y: 300,
+        width: 80,
+        height: 120,
+      });
+
+      const flightId = `flight-play-${cardId}-${Date.now()}`;
+      const newFlight: FlightRequest = {
+        id: flightId,
+        card: cardDef,
+        fromRect,
+        toRect,
+        duration: flightDuration,
+      };
+
+      setActiveFlights((prev) => {
+        const next = [...prev, newFlight];
+        activeFlightsRef.current = next;
+        return next;
+      });
+    }
+
+    onCommand({ type: "play-card", cardId });
+  };
+
+  const renderedHand = [...snapshot.hand];
+  if (
+    hiddenCardInstanceId &&
+    stagedHandCardRef.current &&
+    !renderedHand.some((h) => h.instanceId === stagedHandCardRef.current!.instanceId)
+  ) {
+    const insertIdx = Math.min(stagedHandCardRef.current.index, renderedHand.length);
+    renderedHand.splice(insertIdx, 0, {
+      instanceId: stagedHandCardRef.current.instanceId,
+      faceId: stagedHandCardRef.current.faceId,
+    });
+  }
+
   const dirName = snapshot.direction === 1 ? "clockwise" : "counterclockwise";
   const canDraw = snapshot.allowedControls.includes("draw-until-playable") ||
     snapshot.allowedControls.includes("draw-and-pass");
@@ -97,6 +289,7 @@ export function LiveGameScreen({
           name={player.name}
           online={player.online}
           orientation={orientation}
+          playerId={player.id}
           points={snapshot.scores.find((score) => score.playerId === player.id)?.points ?? 0}
           position={position}
         />
@@ -106,20 +299,18 @@ export function LiveGameScreen({
       {viewer && (
         <PlayerSeat
           active={snapshot.currentPlayerId === viewer.id}
-          cardIds={snapshot.hand.map((h) => h.instanceId)}
-          cards={snapshot.hand.map((h) => findCard(h.faceId))}
+          cardIds={renderedHand.map((h) => h.instanceId)}
+          cards={renderedHand.map((h) => findCard(h.faceId))}
           count={viewer.cardCount}
           disabled={isReconnecting}
           eliminated={viewer.eliminated}
+          hiddenCardInstanceId={hiddenCardInstanceId}
           legalCardIds={snapshot.legalCardIds}
           name={viewer.name}
           online={viewer.online}
-          onPlayCard={(cardId) => {
-            if (!isReconnecting && snapshot.legalCardIds.includes(cardId)) {
-              onCommand({ type: "play-card", cardId });
-            }
-          }}
+          onPlayCard={handlePlayCard}
           orientation="horizontal"
+          playerId={viewer.id}
           points={snapshot.scores.find((score) => score.playerId === viewer.id)?.points ?? 0}
           position="bottom"
         />
@@ -143,9 +334,9 @@ export function LiveGameScreen({
             <GameCard card={cardBack} size="large" />
           </button>
 
-          <div className="pile pile--discard">
+          <div className="pile pile--discard" ref={discardPileRef}>
             <span className="pile__echo" aria-hidden="true" />
-            {topCard && <GameCard card={topCard} size="large" />}
+            {visualTopDiscard && <GameCard card={visualTopDiscard} size="large" />}
           </div>
         </div>
 
@@ -241,6 +432,9 @@ export function LiveGameScreen({
           <span>Reconnecting to game server (attempt {reconnectAttempt})...</span>
         </div>
       )}
+
+      {/* Flight Animation Overlay */}
+      <CardFlightOverlay flights={activeFlights} onFlightEnd={handleFlightEnd} />
     </motion.section>
   );
 }

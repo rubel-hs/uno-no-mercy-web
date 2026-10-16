@@ -12,6 +12,7 @@ type GameCardProps = {
   onClick?: () => void;
   disabled?: boolean;
   "data-card-instance-id"?: string;
+  style?: CSSProperties;
 };
 
 const cardArtwork = import.meta.glob(
@@ -34,12 +35,14 @@ export function GameCard({
   onClick,
   disabled = false,
   "data-card-instance-id": dataCardInstanceId,
+  style: customStyle,
 }: GameCardProps) {
   const artworkUrl = cardArtwork[`../assets/cards/${card.assetFile}`];
   const style: CSSProperties & { "--card-tone": string } = {
     "--card-tone": `var(--uno-${card.color})`,
     ...(rotation ? { transform: `rotate(${rotation}deg)` } : alignFlat ? { transform: "none" } : {}),
     ...(pointerOnly ? { cursor: "pointer", transition: "none" } : {}),
+    ...customStyle,
   };
   const parts = symbolParts[card.kind];
 

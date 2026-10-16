@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { PlayerSnapshot } from "../game/protocol";
@@ -343,6 +343,142 @@ describe("LiveGameScreen", () => {
         type: "play-card",
         cardId: "card-1",
       });
+    });
+
+    test("triggers throw flight animation and buffers top discard when card is played", async () => {
+      const onCommand = vi.fn();
+      const initialSnapshot = createGameSnapshot({
+        legalCardIds: ["card-1"],
+        hand: [
+          { instanceId: "card-1", faceId: "red-5" },
+          { instanceId: "card-2", faceId: "blue-draw-2" },
+          { instanceId: "card-3", faceId: "wild-draw-6" },
+        ],
+        topDiscard: { faceId: "red-7" },
+      });
+
+      const { rerender } = render(
+        <LiveGameScreen onCommand={onCommand} onLeaveRoom={vi.fn()} snapshot={initialSnapshot} />,
+      );
+
+      const discardPile = document.querySelector<HTMLElement>(".pile--discard")!;
+      expect(within(discardPile).getByRole("article", { name: "red 7 card" })).toBeInTheDocument();
+
+      const playedCardEl = document.querySelector('[data-card-instance-id="card-1"]')!;
+      fireEvent.click(playedCardEl);
+
+      expect(onCommand).toHaveBeenCalledWith({
+        type: "play-card",
+        cardId: "card-1",
+      });
+
+      const overlay = screen.getByTestId("card-flight-overlay");
+      expect(overlay).toBeInTheDocument();
+      const flightItem = screen.getByTestId(/card-flight-flight-play-card-1/);
+      expect(flightItem).toBeInTheDocument();
+      expect(within(flightItem).getByRole("article", { name: "red 5 card" })).toBeInTheDocument();
+
+      expect(playedCardEl).toHaveStyle({ visibility: "hidden" });
+
+      const updatedSnapshot = createGameSnapshot({
+        hand: [
+          { instanceId: "card-2", faceId: "blue-draw-2" },
+          { instanceId: "card-3", faceId: "wild-draw-6" },
+        ],
+        topDiscard: { faceId: "red-5" },
+      });
+      rerender(
+        <LiveGameScreen onCommand={onCommand} onLeaveRoom={vi.fn()} snapshot={updatedSnapshot} />,
+      );
+
+      // Discard pile remains buffered to red-7 while flight is in progress
+      expect(within(discardPile).getByRole("article", { name: "red 7 card" })).toBeInTheDocument();
+      expect(within(discardPile).queryByRole("article", { name: "red 5 card" })).not.toBeInTheDocument();
+
+      // Hand card slot remains staged
+      const stagedSlot = document.querySelector('[data-card-instance-id="card-1"]');
+      expect(stagedSlot).toBeInTheDocument();
+      expect(stagedSlot).toHaveStyle({ visibility: "hidden" });
+    });
+
+    test("clears staged card slot and updates visual discard pile when flight completes", async () => {
+      const onCommand = vi.fn();
+      const initialSnapshot = createGameSnapshot({
+        legalCardIds: ["card-1"],
+        hand: [
+          { instanceId: "card-1", faceId: "red-5" },
+          { instanceId: "card-2", faceId: "blue-draw-2" },
+        ],
+        topDiscard: { faceId: "red-7" },
+      });
+
+      const { rerender } = render(
+        <LiveGameScreen flightDuration={0.01} onCommand={onCommand} onLeaveRoom={vi.fn()} snapshot={initialSnapshot} />,
+      );
+
+      const playedCardEl = document.querySelector('[data-card-instance-id="card-1"]')!;
+      fireEvent.click(playedCardEl);
+
+      const updatedSnapshot = createGameSnapshot({
+        hand: [
+          { instanceId: "card-2", faceId: "blue-draw-2" },
+        ],
+        topDiscard: { faceId: "red-5" },
+      });
+      rerender(
+        <LiveGameScreen flightDuration={0.01} onCommand={onCommand} onLeaveRoom={vi.fn()} snapshot={updatedSnapshot} />,
+      );
+
+      const discardPile = document.querySelector<HTMLElement>(".pile--discard")!;
+      await waitFor(() => {
+        expect(within(discardPile).getByRole("article", { name: "red 5 card" })).toBeInTheDocument();
+      });
+
+      expect(document.querySelector('[data-card-instance-id="card-1"]')).not.toBeInTheDocument();
+    });
+
+    test("triggers throw flight animation and buffers discard pile when opponent plays a card", async () => {
+      const initialSnapshot = createGameSnapshot({
+        currentPlayerId: "p2",
+        players: [
+          { id: "p1", name: "Alice", order: 0, cardCount: 3, online: true, eliminated: false },
+          { id: "p2", name: "Bob", order: 1, cardCount: 5, online: true, eliminated: false },
+          { id: "p3", name: "Charlie", order: 2, cardCount: 4, online: true, eliminated: false },
+          { id: "p4", name: "Dave", order: 3, cardCount: 2, online: true, eliminated: false },
+        ],
+        topDiscard: { faceId: "red-7" },
+      });
+
+      const { rerender } = render(
+        <LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={initialSnapshot} />,
+      );
+
+      const discardPile = document.querySelector<HTMLElement>(".pile--discard")!;
+      expect(within(discardPile).getByRole("article", { name: "red 7 card" })).toBeInTheDocument();
+
+      const updatedSnapshot = createGameSnapshot({
+        currentPlayerId: "p3",
+        players: [
+          { id: "p1", name: "Alice", order: 0, cardCount: 3, online: true, eliminated: false },
+          { id: "p2", name: "Bob", order: 1, cardCount: 4, online: true, eliminated: false },
+          { id: "p3", name: "Charlie", order: 2, cardCount: 4, online: true, eliminated: false },
+          { id: "p4", name: "Dave", order: 3, cardCount: 2, online: true, eliminated: false },
+        ],
+        topDiscard: { faceId: "blue-5" },
+      });
+
+      rerender(
+        <LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={updatedSnapshot} />,
+      );
+
+      const overlay = screen.getByTestId("card-flight-overlay");
+      expect(overlay).toBeInTheDocument();
+      const opponentFlight = screen.getByTestId(/card-flight-flight-opponent-p2/);
+      expect(opponentFlight).toBeInTheDocument();
+      expect(within(opponentFlight).getByRole("article", { name: "blue 5 card" })).toBeInTheDocument();
+
+      expect(within(discardPile).getByRole("article", { name: "red 7 card" })).toBeInTheDocument();
+      expect(within(discardPile).queryByRole("article", { name: "blue 5 card" })).not.toBeInTheDocument();
     });
 
     test("clicking draw pile sends draw-until-playable when allowed", () => {

@@ -2,6 +2,7 @@ import { cardBack, type CardDefinition } from "../game/cards";
 import { GameCard } from "./GameCard";
 
 export type PlayerSeatProps = {
+  playerId?: string;
   cards?: CardDefinition[];
   cardIds?: string[];
   count: number;
@@ -13,11 +14,14 @@ export type PlayerSeatProps = {
   eliminated?: boolean;
   online?: boolean;
   legalCardIds?: string[];
+  hiddenCardInstanceId?: string | null;
+  hiddenCardIds?: string[];
   onPlayCard?: (cardId: string) => void;
   disabled?: boolean;
 };
 
 export function PlayerSeat({
+  playerId,
   cards,
   cardIds,
   count,
@@ -29,6 +33,8 @@ export function PlayerSeat({
   eliminated = false,
   online = true,
   legalCardIds,
+  hiddenCardInstanceId,
+  hiddenCardIds,
   onPlayCard,
   disabled = false,
 }: PlayerSeatProps) {
@@ -40,6 +46,7 @@ export function PlayerSeat({
       className={`player-seat player-seat--${position} player-seat--${orientation} ${
         isActualActive ? "is-active" : ""
       } ${eliminated ? "is-eliminated" : ""} ${!online ? "is-offline" : ""}`}
+      data-player-id={playerId}
       aria-label={`${name}, ${points} points${isActualActive ? ", current player" : ""}${
         eliminated ? ", eliminated" : ""
       }${!online ? ", offline" : ""}`}
@@ -60,6 +67,7 @@ export function PlayerSeat({
           const instanceId = cardIds?.[index] ?? card.id;
           const isLegal = legalCardIds ? legalCardIds.includes(instanceId) : true;
           const isPlayable = position === "bottom" && isLegal && !disabled;
+          const isHidden = hiddenCardInstanceId === instanceId || Boolean(hiddenCardIds?.includes(instanceId));
 
           return (
             <GameCard
@@ -67,12 +75,12 @@ export function PlayerSeat({
               card={card}
               className={`player-seat__card ${
                 position === "bottom" && !isLegal ? "is-disabled" : ""
-              }`}
+              } ${isHidden ? "is-staged-hidden" : ""}`}
               data-card-instance-id={instanceId}
-              disabled={position === "bottom" && !isPlayable}
+              disabled={position === "bottom" && (!isPlayable || isHidden)}
               key={`${name}-${card.id}-${index}`}
               onClick={() => {
-                if (isPlayable && onPlayCard) {
+                if (isPlayable && !isHidden && onPlayCard) {
                   onPlayCard(instanceId);
                 }
               }}
@@ -85,6 +93,7 @@ export function PlayerSeat({
                   : undefined
               }
               size={position === "bottom" ? "large" : "small"}
+              style={isHidden ? { visibility: "hidden", pointerEvents: "none" } : undefined}
             />
           );
         })}
