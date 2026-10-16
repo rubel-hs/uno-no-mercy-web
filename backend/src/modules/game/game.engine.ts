@@ -217,12 +217,27 @@ export function applyGameCommand(state: GameState, command: GameCommand): GameTr
         const card = drawCard(next);
         if (!card) return { ok: false, code: "deck-exhausted", state };
         drawn = card;
-        next.players.find(({ id }) => id === command.playerId)!.hand.push(drawn);
         drawnIds.push(drawn.instanceId);
+        if (faceOf(drawn).color === command.color) {
+          break;
+        }
+        next.players.find(({ id }) => id === command.playerId)!.hand.push(drawn);
         checkMercy(next, sourcePlayerId);
         if (next.players.find(({ id }) => id === command.playerId)!.eliminated) break;
-      } while (faceOf(drawn).color !== command.color);
-      events.push({ type: "cards-drawn", playerId: command.playerId, cardIds: drawnIds });
+      } while (true);
+
+      const targetPlayer = next.players.find(({ id }) => id === command.playerId)!;
+      if (!targetPlayer.eliminated && faceOf(drawn).color === command.color) {
+        next.discardPile.push(drawn);
+        next.activeColor = command.color;
+        const keptIds = drawnIds.filter((id) => id !== drawn.instanceId);
+        if (keptIds.length > 0) {
+          events.push({ type: "cards-drawn", playerId: command.playerId, cardIds: keptIds });
+        }
+        events.push({ type: "card-played", playerId: command.playerId, cardId: drawn.instanceId });
+      } else {
+        events.push({ type: "cards-drawn", playerId: command.playerId, cardIds: drawnIds });
+      }
     }
     if (!next.winner) advanceTurn(next, events);
     next.revision++;
