@@ -23,6 +23,7 @@ export interface GameSessionController {
   create: (displayName: string) => Promise<void>;
   join: (roomCode: string, displayName: string) => Promise<void>;
   start: () => void;
+  startNextRound: () => void;
   send: (command: ClientCommand) => string;
   leave: () => void;
 }
@@ -113,6 +114,13 @@ export function useGameSession(): GameSessionController {
     socketRef.current?.send({ type: "start-game" });
   }, []);
 
+  const startNextRound = useCallback(() => {
+    if (status === "connected" && snapshot?.matchStatus === "round-complete" &&
+      snapshot.allowedControls.includes("start-next-round")) {
+      socketRef.current?.send({ type: "start-next-round" });
+    }
+  }, [snapshot, status]);
+
   const send = useCallback((command: ClientCommand): string => {
     return socketRef.current?.send(command) ?? "";
   }, []);
@@ -139,6 +147,7 @@ export function useGameSession(): GameSessionController {
     create,
     join,
     start,
+    startNextRound,
     send,
     leave,
   };

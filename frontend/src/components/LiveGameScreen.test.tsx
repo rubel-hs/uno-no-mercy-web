@@ -36,11 +36,150 @@ function createGameSnapshot(overrides: Partial<PlayerSnapshot> = {}): PlayerSnap
     winner: null,
     legalCardIds: ["card-1", "card-3"],
     allowedControls: ["play-card", "draw-until-playable"],
+    matchStatus: "round-active",
+    roundNumber: 3,
+    targetScore: 1000,
+    scores: [
+      { playerId: "p2", points: 900 },
+      { playerId: "p1", points: 400 },
+      { playerId: "p4", points: 0 },
+      { playerId: "p3", points: 250 },
+    ],
+    roundResult: null,
+    matchWinner: null,
     ...overrides,
   };
 }
 
+function createRoundSnapshot(overrides: Partial<PlayerSnapshot> = {}): PlayerSnapshot {
+  return createGameSnapshot({
+    phase: "finished",
+    matchStatus: "round-complete",
+    winner: "p1",
+    currentPlayerId: null,
+    legalCardIds: [],
+    allowedControls: ["start-next-round", "leave-room"],
+    scores: [
+      { playerId: "p1", points: 780 },
+      { playerId: "p2", points: 900 },
+      { playerId: "p3", points: 250 },
+      { playerId: "p4", points: 0 },
+    ],
+    roundResult: {
+      roundNumber: 3,
+      winnerId: "p1",
+      breakdown: [
+        { playerId: "p1", cardPoints: 130, eliminationBonus: 250, roundPoints: 380, cumulativePoints: 780 },
+        { playerId: "p2", cardPoints: 0, eliminationBonus: 0, roundPoints: 0, cumulativePoints: 900 },
+        { playerId: "p3", cardPoints: 0, eliminationBonus: 0, roundPoints: 0, cumulativePoints: 250 },
+        { playerId: "p4", cardPoints: 0, eliminationBonus: 0, roundPoints: 0, cumulativePoints: 0 },
+      ],
+      matchWinnerId: null,
+    },
+    ...overrides,
+  });
+}
+
 describe("LiveGameScreen", () => {
+  describe("server-driven match scores and results", () => {
+    test("renders cumulative points by player ID on every active seat", () => {
+      render(<LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={createGameSnapshot()} />);
+
+      for (const [name, points] of [["Alice", 400], ["Bob", 900], ["Charlie", 250], ["Dave", 0]] as const) {
+        const seat = screen.getByRole("region", { name: new RegExp(`${name}, ${points} points`) });
+        expect(within(seat).getByText(String(points))).toBeInTheDocument();
+      }
+    });
+
+    test("shows the round winner, public breakdown, and standings ordered by cumulative points", () => {
+      render(<LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={createRoundSnapshot()} />);
+
+      expect(screen.getByRole("heading", { name: "Round 3 complete" })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Round winner: Alice" })).toBeInTheDocument();
+      const breakdown = screen.getByRole("table", { name: "Round 3 score breakdown" });
+      expect(within(breakdown).getByRole("columnheader", { name: "Card points" })).toBeInTheDocument();
+      expect(within(breakdown).getByRole("columnheader", { name: "Elimination bonus" })).toBeInTheDocument();
+      expect(within(breakdown).getByRole("row", { name: "Alice 130 250 380 780" })).toBeInTheDocument();
+      expect(within(breakdown).getByRole("row", { name: "Dave 0 0 0 0" })).toBeInTheDocument();
+      const rows = within(screen.getByRole("table", { name: "Cumulative standings" })).getAllByRole("row");
+      expect(rows.slice(1).map((row) => row.textContent)).toEqual(["Bob900", "Alice780", "Charlie250", "Dave0"]);
+      expect(screen.queryByRole("button", { name: /draw|declare uno/i })).not.toBeInTheDocument();
+    });
+
+    test("dispatches start-next-round only from the server-authorized control", () => {
+      const onCommand = vi.fn();
+      render(<LiveGameScreen onCommand={onCommand} onLeaveRoom={vi.fn()} snapshot={createRoundSnapshot()} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Next Round" }));
+      expect(onCommand).toHaveBeenCalledExactlyOnceWith({ type: "start-next-round" });
+    });
+
+    test.each(["p1", "p2"])("keeps viewer %s read-only without a server next-round control", (viewerId) => {
+      render(<LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={createRoundSnapshot({ viewerId, allowedControls: ["leave-room"] })} />);
+
+      expect(screen.getByRole("table", { name: "Cumulative standings" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Next Round" })).not.toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent(/waiting for host/i);
+    });
+
+    test("disables result actions while reconnecting and retains scores", () => {
+      const onCommand = vi.fn();
+      const onLeaveRoom = vi.fn();
+      render(<LiveGameScreen connectionState="reconnecting" reconnectAttempt={4} onCommand={onCommand} onLeaveRoom={onLeaveRoom} snapshot={createRoundSnapshot()} />);
+
+      expect(screen.getByRole("status")).toHaveTextContent(/reconnecting.*attempt 4/i);
+      const next = screen.getByRole("button", { name: "Next Round" });
+      const leave = screen.getByRole("button", { name: "Return to Lobby" });
+      expect(next).toBeDisabled();
+      expect(leave).toBeDisabled();
+      fireEvent.click(next);
+      fireEvent.click(leave);
+      expect(onCommand).not.toHaveBeenCalled();
+      expect(onLeaveRoom).not.toHaveBeenCalled();
+      expect(within(screen.getByRole("table", { name: "Cumulative standings" })).getByRole("row", { name: "Alice 780" })).toBeInTheDocument();
+    });
+
+    test("shows the final match winner rather than the round winner with no next-round action", () => {
+      const snapshot = createRoundSnapshot({
+        matchStatus: "match-complete",
+        matchWinner: "p2",
+        scores: [{ playerId: "p1", points: 780 }, { playerId: "p2", points: 1150 }],
+      });
+      render(<LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={snapshot} />);
+
+      expect(screen.getByRole("heading", { name: "Match complete" })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Match winner: Bob" })).toBeInTheDocument();
+      expect(within(screen.getByRole("table", { name: "Cumulative standings" })).getByRole("row", { name: "Bob 1150" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Next Round" })).not.toBeInTheDocument();
+    });
+
+    test("retains historical standings for a departed player", () => {
+      const snapshot = createRoundSnapshot({
+        players: createGameSnapshot().players.filter((player) => player.id !== "p2"),
+      });
+      render(<LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={snapshot} />);
+
+      expect(within(screen.getByRole("table", { name: "Cumulative standings" })).getByRole("row", { name: /p2.*900/ })).toBeInTheDocument();
+    });
+
+    test("keeps the next active round on the board even when the prior round result is present", () => {
+      const snapshot = createRoundSnapshot({ phase: "playing", matchStatus: "round-active", roundNumber: 4, winner: null, allowedControls: ["draw-and-pass"] });
+      render(<LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={snapshot} />);
+
+      expect(screen.getByRole("region", { name: "UNO No Mercy game table" })).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Alice, 780 points" })).toBeInTheDocument();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    test("preserves return behavior from the round result", () => {
+      const onLeaveRoom = vi.fn();
+      render(<LiveGameScreen onCommand={vi.fn()} onLeaveRoom={onLeaveRoom} snapshot={createRoundSnapshot()} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Return to Lobby" }));
+      expect(onLeaveRoom).toHaveBeenCalledOnce();
+    });
+  });
+
   describe("board projection from server snapshot", () => {
     test("renders viewer hand faces, opponent card counts, draw pile count, and discard card", () => {
       const snapshot = createGameSnapshot();
@@ -102,11 +241,13 @@ describe("LiveGameScreen", () => {
       const snapshot = createGameSnapshot({
         phase: "finished",
         winner: "p1",
+        matchStatus: "match-complete",
+        matchWinner: "p1",
       });
       render(<LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={snapshot} />);
 
       expect(screen.getByText(/winner/i)).toBeInTheDocument();
-      expect(screen.getByText("Alice")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Match winner: Alice" })).toBeInTheDocument();
     });
   });
 

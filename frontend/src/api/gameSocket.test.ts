@@ -96,6 +96,12 @@ const snapshotFixture: PlayerSnapshot = {
   winner: null,
   legalCardIds: [],
   allowedControls: ["start-game", "leave-room"],
+  matchStatus: "lobby",
+  roundNumber: 0,
+  targetScore: 1000,
+  scores: [{ playerId: "player-1", points: 0 }],
+  roundResult: null,
+  matchWinner: null,
 };
 
 describe("game WebSocket client", () => {

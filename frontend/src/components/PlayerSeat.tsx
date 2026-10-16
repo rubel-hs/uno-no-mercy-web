@@ -51,7 +51,7 @@ export function PlayerSeat({
           {eliminated && <span className="player-seat__status-tag">Eliminated</span>}
           {!online && !eliminated && <span className="player-seat__status-tag">Offline</span>}
         </span>
-        <span className="player-seat__score">
+        <span className="player-seat__score" title="Cumulative points">
           {points}<i aria-hidden="true">★</i>
         </span>
       </div>

@@ -114,12 +114,12 @@ export interface PlayerSnapshot {
   winner: string | null;
   legalCardIds: string[];
   allowedControls: ClientCommand["type"][];
-  matchStatus?: MatchStatus;
-  roundNumber?: number;
-  targetScore?: 1000;
-  scores?: PlayerScore[];
-  roundResult?: RoundResult | null;
-  matchWinner?: string | null;
+  matchStatus: MatchStatus;
+  roundNumber: number;
+  targetScore: 1000;
+  scores: PlayerScore[];
+  roundResult: RoundResult | null;
+  matchWinner: string | null;
 }
 
 export type ServerMessage =

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import App from "../App";
@@ -51,8 +51,40 @@ function createLobbySnapshot(overrides: Partial<PlayerSnapshot> = {}): PlayerSna
     winner: null,
     legalCardIds: [],
     allowedControls: ["start-game", "leave-room"],
+    matchStatus: "lobby",
+    roundNumber: 0,
+    targetScore: 1000,
+    scores: [{ playerId: "host-id", points: 0 }],
+    roundResult: null,
+    matchWinner: null,
     ...overrides,
   };
+}
+
+function createResultSnapshot(overrides: Partial<PlayerSnapshot> = {}): PlayerSnapshot {
+  return createLobbySnapshot({
+    revision: 20,
+    phase: "finished",
+    matchStatus: "round-complete",
+    roundNumber: 2,
+    players: [
+      { id: "host-id", name: "Alice", order: 0, cardCount: 0, online: true, eliminated: false },
+      { id: "guest-id", name: "Bob", order: 1, cardCount: 3, online: true, eliminated: false },
+    ],
+    winner: "host-id",
+    scores: [{ playerId: "host-id", points: 640 }, { playerId: "guest-id", points: 250 }],
+    roundResult: {
+      roundNumber: 2,
+      winnerId: "host-id",
+      breakdown: [
+        { playerId: "host-id", cardPoints: 140, eliminationBonus: 0, roundPoints: 140, cumulativePoints: 640 },
+        { playerId: "guest-id", cardPoints: 0, eliminationBonus: 0, roundPoints: 0, cumulativePoints: 250 },
+      ],
+      matchWinnerId: null,
+    },
+    allowedControls: ["start-next-round", "leave-room"],
+    ...overrides,
+  });
 }
 
 class MockSocketClient implements GameSocketClient {
@@ -321,6 +353,82 @@ describe("multiplayer room and lobby flow", () => {
   });
 
   describe("reload session and dev mode isolation", () => {
+    test("restores round scores after reload and sends Next Round through the session socket", async () => {
+      saveSession(credentialsFixture);
+      render(<App />);
+      await screen.findByText("ABCDEF");
+      act(() => mockSocket?.emitSnapshot(createResultSnapshot()));
+
+      expect(screen.getByRole("heading", { name: "Round 2 complete" })).toBeInTheDocument();
+      const standings = screen.getByRole("table", { name: "Cumulative standings" });
+      expect(within(standings).getByRole("row", { name: "Alice 640" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Next Round" }));
+      expect(mockSocket?.sentCommands).toEqual([{ type: "start-next-round" }]);
+      // Sending does not optimistically clear the result or reset scores.
+      expect(screen.getByRole("table", { name: "Cumulative standings" })).toBeInTheDocument();
+
+      act(() => mockSocket?.emitSnapshot(createResultSnapshot({
+        revision: 21, phase: "playing", matchStatus: "round-active", roundNumber: 3,
+        winner: null, currentPlayerId: "host-id", allowedControls: ["draw-until-playable"],
+      })));
+      expect(screen.getByRole("region", { name: "Alice, 640 points, current player" })).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Bob, 250 points" })).toBeInTheDocument();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    test("keeps results read-only during reconnect and replaces them with fresh server match metadata", async () => {
+      saveSession(credentialsFixture);
+      render(<App />);
+      await screen.findByText("ABCDEF");
+      act(() => mockSocket?.emitSnapshot(createResultSnapshot()));
+      act(() => mockSocket?.options.onConnectionStateChange?.("reconnecting", 2));
+
+      const next = screen.getByRole("button", { name: "Next Round" });
+      expect(next).toBeDisabled();
+      expect(screen.getByRole("status")).toHaveTextContent(/reconnecting.*attempt 2/i);
+      fireEvent.click(next);
+      expect(mockSocket?.sentCommands).toEqual([]);
+      expect(within(screen.getByRole("table", { name: "Cumulative standings" })).getByRole("row", { name: "Alice 640" })).toBeInTheDocument();
+
+      act(() => mockSocket?.emitSnapshot(createResultSnapshot({
+        revision: 24, matchStatus: "match-complete", matchWinner: "guest-id",
+        scores: [{ playerId: "host-id", points: 640 }, { playerId: "guest-id", points: 1080 }],
+        allowedControls: ["leave-room"],
+      })));
+      expect(screen.getByRole("heading", { name: "Match winner: Bob" })).toBeInTheDocument();
+      expect(within(screen.getByRole("table", { name: "Cumulative standings" })).getByRole("row", { name: "Bob 1080" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Next Round" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+
+    test("restores guest standings without Next Round and honors a later host transfer", async () => {
+      saveSession({ ...credentialsFixture, playerId: "guest-id" });
+      render(<App />);
+      await screen.findByText("ABCDEF");
+      act(() => mockSocket?.emitSnapshot(createResultSnapshot({ viewerId: "guest-id", allowedControls: ["leave-room"] })));
+
+      expect(screen.getByRole("table", { name: "Cumulative standings" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Next Round" })).not.toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent(/waiting for host/i);
+      expect(mockSocket?.sentCommands).toEqual([]);
+
+      act(() => mockSocket?.emitSnapshot(createResultSnapshot({ viewerId: "guest-id", hostPlayerId: "guest-id", revision: 21 })));
+      fireEvent.click(screen.getByRole("button", { name: "Next Round" }));
+      expect(mockSocket?.sentCommands).toEqual([{ type: "start-next-round" }]);
+    });
+
+    test("returning from results preserves leave-room and session cleanup", async () => {
+      saveSession(credentialsFixture);
+      render(<App />);
+      await screen.findByText("ABCDEF");
+      act(() => mockSocket?.emitSnapshot(createResultSnapshot()));
+
+      fireEvent.click(screen.getByRole("button", { name: "Return to Lobby" }));
+      expect(screen.getByRole("heading", { name: "Choose your table" })).toBeInTheDocument();
+      expect(mockSocket?.sentCommands).toEqual([{ type: "leave-room" }]);
+      expect(sessionStorage.getItem(SESSION_STORAGE_KEY)).toBeNull();
+    });
+
     test("saved session automatically reconnects on mount", async () => {
       saveSession(credentialsFixture);
 

@@ -90,7 +90,13 @@ export default function App() {
           </header>
           <LiveGameScreen
             connectionState={session.status}
-            onCommand={session.send}
+            onCommand={(command) => {
+              if (command.type === "start-next-round") {
+                session.startNextRound();
+              } else {
+                session.send(command);
+              }
+            }}
             onLeaveRoom={session.leave}
             reconnectAttempt={session.reconnectAttempt}
             snapshot={session.snapshot}
@@ -127,6 +133,12 @@ export default function App() {
       winner: null,
       legalCardIds: [],
       allowedControls: ["leave-room" as const],
+      matchStatus: "lobby" as const,
+      roundNumber: 0,
+      targetScore: 1000 as const,
+      scores: [{ playerId: session.credentials.playerId, points: 0 }],
+      roundResult: null,
+      matchWinner: null,
     };
 
     return (

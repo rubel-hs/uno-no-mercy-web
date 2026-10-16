@@ -5,6 +5,7 @@ import { cardBack, findCard } from "../game/cards";
 import type { CardColor, ClientCommand, PlayerSnapshot } from "../game/protocol";
 import { GameCard } from "./GameCard";
 import { GameChoiceDialog } from "./GameChoiceDialog";
+import { MatchResultScreen } from "./MatchResultScreen";
 import { PlayerSeat } from "./PlayerSeat";
 
 export interface LiveGameScreenProps {
@@ -31,6 +32,18 @@ export function LiveGameScreen({
   onLeaveRoom,
 }: LiveGameScreenProps) {
   const isReconnecting = connectionState === "reconnecting";
+
+  if (snapshot.matchStatus === "round-complete" || snapshot.matchStatus === "match-complete") {
+    return (
+      <MatchResultScreen
+        connectionState={connectionState}
+        onCommand={onCommand}
+        onLeaveRoom={onLeaveRoom}
+        reconnectAttempt={reconnectAttempt}
+        snapshot={snapshot}
+      />
+    );
+  }
 
   // Sort players by order
   const sortedPlayers = [...snapshot.players].sort((a, b) => a.order - b.order);
@@ -61,31 +74,6 @@ export function LiveGameScreen({
   const canUno = snapshot.allowedControls.includes("declare-uno");
   const canAcceptDraw = snapshot.allowedControls.includes("accept-draw");
 
-  const winnerPlayer = snapshot.winner
-    ? snapshot.players.find((p) => p.id === snapshot.winner)
-    : null;
-
-  if (snapshot.phase === "finished" && snapshot.winner) {
-    return (
-      <div
-        aria-label="Game Over"
-        aria-modal="true"
-        className="game-winner-overlay"
-        role="dialog"
-      >
-        <div className="game-winner-card">
-          <span className="section-kicker">Match Concluded</span>
-          <h2>Winner!</h2>
-          <p className="game-winner-name">{winnerPlayer?.name ?? "Player"}</p>
-          <p>has claimed victory in UNO No Mercy!</p>
-          <button className="primary-action-button" onClick={onLeaveRoom} type="button">
-            Return to Lobby
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <motion.section
       animate={{ opacity: 1, scale: 1 }}
@@ -109,7 +97,7 @@ export function LiveGameScreen({
           name={player.name}
           online={player.online}
           orientation={orientation}
-          points={0}
+          points={snapshot.scores.find((score) => score.playerId === player.id)?.points ?? 0}
           position={position}
         />
       ))}
@@ -132,7 +120,7 @@ export function LiveGameScreen({
             }
           }}
           orientation="horizontal"
-          points={0}
+          points={snapshot.scores.find((score) => score.playerId === viewer.id)?.points ?? 0}
           position="bottom"
         />
       )}
@@ -243,26 +231,6 @@ export function LiveGameScreen({
       {isReconnecting && (
         <div className="reconnect-banner" role="status">
           <span>Reconnecting to game server (attempt {reconnectAttempt})...</span>
-        </div>
-      )}
-
-      {/* Match Finished Winner Screen */}
-      {snapshot.phase === "finished" && snapshot.winner && (
-        <div
-          aria-label="Game Over"
-          aria-modal="true"
-          className="game-winner-overlay"
-          role="dialog"
-        >
-          <div className="game-winner-card">
-            <span className="section-kicker">Match Concluded</span>
-            <h2>Winner!</h2>
-            <p className="game-winner-name">{winnerPlayer?.name ?? "Player"}</p>
-            <p>has claimed victory in UNO No Mercy!</p>
-            <button className="primary-action-button" onClick={onLeaveRoom} type="button">
-              Return to Lobby
-            </button>
-          </div>
         </div>
       )}
     </motion.section>
