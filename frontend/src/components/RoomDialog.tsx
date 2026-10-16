@@ -95,7 +95,7 @@ export function RoomDialog({
       <div
         aria-labelledby="dialog-title"
         aria-modal="true"
-        className="dialog-panel"
+        className="dialog-panel dialog-card"
         role="dialog"
       >
         <div className="dialog-header">

@@ -899,7 +899,7 @@ describe("LiveGameScreen", () => {
           snapshot={createGameSnapshot()}
         />,
       );
-      expect(document.querySelector(".opponents-strip")).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Opponent players" })).toBeInTheDocument();
     });
   });
 
@@ -1007,7 +1007,7 @@ describe("LiveGameScreen", () => {
           snapshot={sampleSnapshot}
         />,
       );
-      expect(document.querySelector(".opponents-strip")).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Opponent players" })).toBeInTheDocument();
       expect(document.querySelector(".table-center")).toBeInTheDocument();
       expect(document.querySelector(".player-seat--bottom")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Declare UNO" })).toBeInTheDocument();
@@ -1034,7 +1034,7 @@ describe("LiveGameScreen", () => {
           snapshot={fiveOpponentSnapshot}
         />,
       );
-      const opponentStrip = document.querySelector(".opponents-strip");
+      const opponentStrip = screen.getByRole("region", { name: "Opponent players" });
       expect(opponentStrip).toBeInTheDocument();
       expect(opponentStrip?.querySelectorAll(".player-seat").length).toBe(5);
     });
@@ -1064,7 +1064,7 @@ describe("LiveGameScreen", () => {
           snapshot={createGameSnapshot()}
         />,
       );
-      const opponentStrip = document.querySelector(".opponents-strip");
+      const opponentStrip = screen.getByRole("region", { name: "Opponent players" });
       const cardCountBadge = opponentStrip?.querySelector(".player-seat__card-count");
       expect(cardCountBadge).toBeInTheDocument();
       expect(cardCountBadge?.querySelector(".player-seat__card-count-icon")).toBeInTheDocument();
@@ -1122,6 +1122,55 @@ describe("LiveGameScreen", () => {
       expect(mediaRule).toBeDefined();
     });
 
+    it("applies justify-content: safe center to opponents-strip on mobile portrait", () => {
+      const allRules = Array.from(document.styleSheets).flatMap((sheet) => {
+        try {
+          return Array.from(sheet.cssRules);
+        } catch {
+          return [];
+        }
+      });
+      const mediaRule = allRules.find(
+        (rule) =>
+          rule instanceof CSSMediaRule &&
+          rule.conditionText.includes("max-width: 768px") &&
+          rule.conditionText.includes("orientation: portrait"),
+      ) as CSSMediaRule | undefined;
+
+      const stripRule = Array.from(mediaRule?.cssRules || []).find(
+        (r) => r instanceof CSSStyleRule && r.selectorText === ".opponents-strip",
+      ) as CSSStyleRule | undefined;
+
+      expect(stripRule?.style.justifyContent).toBe("safe center");
+    });
+
+    it("defines mobile responsiveness rules for dialog cards and color grid", () => {
+      const allRules = Array.from(document.styleSheets).flatMap((sheet) => {
+        try {
+          return Array.from(sheet.cssRules);
+        } catch {
+          return [];
+        }
+      });
+      const mediaRule = allRules.find(
+        (rule) =>
+          rule instanceof CSSMediaRule &&
+          rule.conditionText.includes("max-width: 600px") &&
+          !rule.conditionText.includes("portrait"),
+      ) as CSSMediaRule | undefined;
+
+      const dialogRule = Array.from(mediaRule?.cssRules || []).find(
+        (r) => r instanceof CSSStyleRule && r.selectorText.includes(".dialog-card"),
+      ) as CSSStyleRule | undefined;
+
+      const colorGridRule = Array.from(mediaRule?.cssRules || []).find(
+        (r) => r instanceof CSSStyleRule && r.selectorText.includes(".color-choice-grid"),
+      ) as CSSStyleRule | undefined;
+
+      expect(dialogRule?.style.width).toBe("min(92vw, 420px)");
+      expect(colorGridRule?.style.gridTemplateColumns).toBe("repeat(2, 1fr)");
+    });
+
     it("correctly locates opponent seat in opponents-strip for card flight coordinates", () => {
       const sampleSnapshot = createGameSnapshot({ viewerId: "p2" });
       render(
@@ -1131,7 +1180,8 @@ describe("LiveGameScreen", () => {
           snapshot={sampleSnapshot}
         />,
       );
-      const opponentSeat = document.querySelector('.opponents-strip [data-player-id="p1"]');
+      const opponentStrip = screen.getByRole("region", { name: "Opponent players" });
+      const opponentSeat = opponentStrip.querySelector('[data-player-id="p1"]');
       expect(opponentSeat).toBeInTheDocument();
       expect(opponentSeat?.closest(".opponents-strip")).not.toBeNull();
     });
@@ -1155,7 +1205,8 @@ describe("LiveGameScreen", () => {
         />,
       );
 
-      const opponentSeat = document.querySelector('.opponents-strip [data-player-id="p1"]') as HTMLElement;
+      const opponentStrip = screen.getByRole("region", { name: "Opponent players" });
+      const opponentSeat = opponentStrip.querySelector('[data-player-id="p1"]') as HTMLElement;
       expect(opponentSeat).toBeInTheDocument();
 
       // Mock opponent seat with non-zero portrait dimensions
@@ -1213,6 +1264,83 @@ describe("LiveGameScreen", () => {
       expect(flightElement.style.height).toBe("50px");
     });
 
+    it("centers flight origin coordinates for wide opponent seats", () => {
+      const initialSnapshot = createGameSnapshot({
+        viewerId: "p2",
+        currentPlayerId: "p1",
+        topDiscard: { faceId: "red-5" },
+        players: [
+          { id: "p1", name: "Alice", order: 0, cardCount: 4, online: true, eliminated: false },
+          { id: "p2", name: "Bob", order: 1, cardCount: 5, online: true, eliminated: false },
+        ],
+      });
+
+      const { rerender } = render(
+        <LiveGameScreen
+          onCommand={vi.fn()}
+          onLeaveRoom={vi.fn()}
+          snapshot={initialSnapshot}
+        />,
+      );
+
+      const opponentStrip = screen.getByRole("region", { name: "Opponent players" });
+      const opponentSeat = opponentStrip.querySelector('[data-player-id="p1"]') as HTMLElement;
+      expect(opponentSeat).toBeInTheDocument();
+
+      // Mock wide opponent seat (width 140)
+      vi.spyOn(opponentSeat, "getBoundingClientRect").mockReturnValue({
+        x: 100,
+        y: 20,
+        left: 100,
+        top: 20,
+        right: 240,
+        bottom: 70,
+        width: 140,
+        height: 50,
+        toJSON: () => {},
+      });
+
+      const miniCards = opponentSeat.querySelectorAll(".player-seat__card");
+      miniCards.forEach((c) => {
+        vi.spyOn(c, "getBoundingClientRect").mockReturnValue({
+          x: 0,
+          y: 0,
+          left: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: 0,
+          height: 0,
+          toJSON: () => {},
+        });
+      });
+
+      // Alice plays blue-3
+      const nextSnapshot = {
+        ...initialSnapshot,
+        revision: initialSnapshot.revision + 1,
+        currentPlayerId: "p2",
+        topDiscard: { faceId: "blue-3" },
+        players: [
+          { id: "p1", name: "Alice", order: 0, cardCount: 3, online: true, eliminated: false },
+          { id: "p2", name: "Bob", order: 1, cardCount: 5, online: true, eliminated: false },
+        ],
+      };
+
+      rerender(
+        <LiveGameScreen
+          onCommand={vi.fn()}
+          onLeaveRoom={vi.fn()}
+          snapshot={nextSnapshot}
+        />,
+      );
+
+      const flightElement = document.querySelector('[data-testid^="card-flight-flight-opponent-p1-"]') as HTMLElement;
+      expect(flightElement).toBeInTheDocument();
+      // Centered X: 100 + (140 - 80) / 2 = 130px
+      expect(flightElement.style.transform).toContain("130px");
+    });
+
     it("resolves flight target coordinates to opponent seat in opponents-strip when opponent draws cards", () => {
       const initialSnapshot = createGameSnapshot({
         viewerId: "p2",
@@ -1232,7 +1360,8 @@ describe("LiveGameScreen", () => {
         />,
       );
 
-      const opponentSeat = document.querySelector('.opponents-strip [data-player-id="p1"]') as HTMLElement;
+      const opponentStrip = screen.getByRole("region", { name: "Opponent players" });
+      const opponentSeat = opponentStrip.querySelector('[data-player-id="p1"]') as HTMLElement;
       expect(opponentSeat).toBeInTheDocument();
 
       vi.spyOn(opponentSeat, "getBoundingClientRect").mockReturnValue({

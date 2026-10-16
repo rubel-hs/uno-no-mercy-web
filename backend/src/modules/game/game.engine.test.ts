@@ -307,6 +307,7 @@ describe("roulette and Mercy", () => {
     expect(applyGameCommand(played, { type: "choose-roulette-color", playerId: "a", color: "yellow" }).ok).toBe(false);
     const resolved = applyGameCommand(played, { type: "choose-roulette-color", playerId: "b", color: "yellow" });
     expect(resolved.ok).toBe(true);
+    if (!resolved.ok) throw new Error("expected resolved.ok");
     expect(handOf(resolved.state, "b")).toEqual(["b-keep", "wild", "other"]);
     expect(resolved.state.discardPile[resolved.state.discardPile.length - 1]!.instanceId).toBe("match");
     expect(resolved.events).toContainEqual({ type: "card-played", playerId: "b", cardId: "match" });

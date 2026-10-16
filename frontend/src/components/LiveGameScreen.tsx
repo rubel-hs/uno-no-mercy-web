@@ -84,10 +84,13 @@ function getSeatElementCoordinates(
     if (!el) continue;
     const rect = el.getBoundingClientRect();
     if (rect.width > 0 || rect.height > 0) {
+      const originX = rect.x ?? rect.left ?? fallback.x;
+      const originY = rect.y ?? rect.top ?? fallback.y;
+      const flightWidth = Math.min(rect.width || fallback.width, 80);
       return {
-        x: rect.x ?? rect.left ?? fallback.x,
-        y: rect.y ?? rect.top ?? fallback.y,
-        width: Math.min(rect.width || fallback.width, 80),
+        x: rect.width > 80 ? originX + (rect.width - 80) / 2 : originX,
+        y: originY,
+        width: flightWidth,
         height: Math.min(rect.height || fallback.height, 120),
       };
     }
@@ -458,15 +461,18 @@ export function LiveGameScreen({
       const cardElement = document.querySelector(`[data-card-instance-id="${cardId}"]`);
       const bottomHandEl = document.querySelector(".player-seat--bottom .player-seat__hand");
       const defaultCardFallback = getDefaultCoordinates("card");
-      const handFallback =
-        bottomHandEl && bottomHandEl.getBoundingClientRect().height > 0
-          ? {
-              x: bottomHandEl.getBoundingClientRect().left,
-              y: bottomHandEl.getBoundingClientRect().top,
-              width: 80,
-              height: 120,
-            }
-          : defaultCardFallback;
+      let handFallback = defaultCardFallback;
+      if (bottomHandEl) {
+        const handRect = bottomHandEl.getBoundingClientRect();
+        if (handRect.height > 0) {
+          handFallback = {
+            x: handRect.left,
+            y: handRect.top,
+            width: 80,
+            height: 120,
+          };
+        }
+      }
       const fromRect = getElementCoordinates(cardElement, handFallback);
       const toRect = getElementCoordinates(
         discardPileRef.current,

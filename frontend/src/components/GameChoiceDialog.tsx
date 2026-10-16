@@ -43,7 +43,7 @@ export function GameChoiceDialog({
       <div
         aria-labelledby="choice-dialog-title"
         aria-modal="true"
-        className="dialog-panel choice-dialog-panel"
+        className="dialog-panel choice-dialog-panel dialog-card"
         role="dialog"
       >
         <div className="dialog-header">
@@ -63,7 +63,7 @@ export function GameChoiceDialog({
         </div>
 
         {(isColorChoice || isRouletteChoice) && (
-          <div className="choice-color-grid">
+          <div className="choice-color-grid color-choice-grid">
             {COLORS.map(({ color, label, bg }) => (
               <button
                 aria-label={label}

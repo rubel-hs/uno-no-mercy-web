@@ -1,8 +1,9 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import App from "./App";
 import { GameBoard } from "./components/GameBoard";
+import { GameChoiceDialog } from "./components/GameChoiceDialog";
 import { findCard } from "./game/cards";
 import "./index.css";
 
@@ -336,5 +337,33 @@ describe("game board shell", () => {
     const computed = getComputedStyle(firstFilename);
     expect(computed.textOverflow).not.toBe("ellipsis");
     expect(computed.whiteSpace).toBe("normal");
+  });
+
+  test("scales modal dialogs responsively with dialog-card class and viewport bounds", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create game room" }));
+    const dialog = screen.getByRole("dialog", { name: "Create Room" });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveClass("dialog-card");
+  });
+
+  test("renders GameChoiceDialog with dialog-card and color-choice-grid for mobile scaling", () => {
+    render(
+      <GameChoiceDialog
+        choice={{ type: "choose-color", playerId: "p1" }}
+        onChooseColor={vi.fn()}
+        onChooseRouletteColor={vi.fn()}
+        onChooseSwapTarget={vi.fn()}
+        players={[{ id: "p1", name: "Alice", order: 0, online: true, eliminated: false, cardCount: 7 }]}
+        viewerId="p1"
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: /choose a color/i });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveClass("dialog-card");
+    const grid = dialog.querySelector(".color-choice-grid");
+    expect(grid).toBeInTheDocument();
   });
 });
