@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { cardBack, findCard } from "../game/cards";
-import { CardFlightOverlay, type FlightRequest } from "./CardFlightOverlay";
+import { CardFlightOverlay, isReducedMotionActive, type FlightRequest } from "./CardFlightOverlay";
 
 describe("CardFlightOverlay", () => {
   it("renders active card flights in a fixed overlay layer", () => {
@@ -106,5 +106,55 @@ describe("CardFlightOverlay", () => {
     } finally {
       window.matchMedia = originalMatchMedia;
     }
+  });
+
+  describe("isReducedMotionActive helper", () => {
+    it("returns true immediately if motionReduced hook returned true", () => {
+      expect(isReducedMotionActive(true)).toBe(true);
+    });
+
+    it("checks window.matchMedia('(prefers-reduced-motion: reduce)') when hook returns false or null", () => {
+      const originalMatchMedia = window.matchMedia;
+      const matchMediaMock = vi.fn().mockImplementation((query: string) => ({
+        matches: query === "(prefers-reduced-motion: reduce)",
+        media: query,
+      }));
+      window.matchMedia = matchMediaMock;
+
+      try {
+        expect(isReducedMotionActive(false)).toBe(true);
+        expect(isReducedMotionActive(null)).toBe(true);
+        expect(matchMediaMock).toHaveBeenCalledWith("(prefers-reduced-motion: reduce)");
+      } finally {
+        window.matchMedia = originalMatchMedia;
+      }
+    });
+
+    it("returns false when prefers-reduced-motion does not match", () => {
+      const originalMatchMedia = window.matchMedia;
+      window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+      }));
+
+      try {
+        expect(isReducedMotionActive(false)).toBe(false);
+      } finally {
+        window.matchMedia = originalMatchMedia;
+      }
+    });
+
+    it("safely returns false when matchMedia is not a function", () => {
+      const originalMatchMedia = window.matchMedia;
+      // @ts-expect-error testing undefined matchMedia
+      window.matchMedia = undefined;
+
+      try {
+        expect(isReducedMotionActive(false)).toBe(false);
+        expect(isReducedMotionActive(null)).toBe(false);
+      } finally {
+        window.matchMedia = originalMatchMedia;
+      }
+    });
   });
 });

@@ -1,7 +1,8 @@
-import { motion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 
 import directionIcon from "../assets/icons/game_direction.png";
 import { cardBack, findCard, type CardDefinition } from "../game/cards";
+import { isReducedMotionActive } from "./CardFlightOverlay";
 import { GameCard } from "./GameCard";
 import { PlayerSeat } from "./PlayerSeat";
 
@@ -17,6 +18,8 @@ type GameBoardProps = {
 };
 
 export function GameBoard({ direction = "clockwise", stackedCards = [] }: GameBoardProps) {
+  const motionReduced = useReducedMotion();
+  const shouldReduceMotion = isReducedMotionActive(motionReduced);
   const stackOffsetStep = Math.min(5, 15 / Math.max(stackedCards.length, 1));
 
   return (
@@ -26,7 +29,7 @@ export function GameBoard({ direction = "clockwise", stackedCards = [] }: GameBo
       className="game-table"
       initial={{ opacity: 0, scale: 0.985 }}
       role="region"
-      transition={{ duration: 0.38 }}
+      transition={{ duration: shouldReduceMotion ? 0 : 0.38 }}
     >
       <div className="table-grid" aria-hidden="true" />
       <div className="table-scar table-scar--one" aria-hidden="true" />

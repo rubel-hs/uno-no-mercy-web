@@ -4,7 +4,7 @@ import { findCard } from "../game/cards";
 import { PlayerSeat } from "./PlayerSeat";
 
 describe("PlayerSeat static cards", () => {
-  it("renders hand cards with data-card-instance-id and static styling", () => {
+  it("renders hand cards strictly static with zero hover elevation, tilt, or floating", () => {
     const card = findCard("blue-0");
     render(
       <PlayerSeat
@@ -21,5 +21,7 @@ describe("PlayerSeat static cards", () => {
     const cardElement = screen.getByRole("article", { name: /blue 0/i });
     expect(cardElement).toHaveAttribute("data-card-instance-id", "c1");
     expect(cardElement.className).not.toContain("game-card--interactive-lift");
+    expect(cardElement.style.transform).toBe("none");
+    expect(cardElement.style.transition).toBe("none");
   });
 });

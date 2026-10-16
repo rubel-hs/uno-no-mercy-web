@@ -22,7 +22,7 @@ export interface CardFlightOverlayProps {
 const DEFAULT_FLIGHT_DURATION = 0.28;
 const FLIGHT_EASING = [0.22, 1, 0.36, 1] as const;
 
-function isReducedMotionActive(motionReduced: boolean | null): boolean {
+export function isReducedMotionActive(motionReduced: boolean | null): boolean {
   if (motionReduced) {
     return true;
   }

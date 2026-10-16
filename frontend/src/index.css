@@ -682,7 +682,15 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 4px; }
 .player-seat--bottom .player-seat__meta small { font-size: .68rem; }
 .player-seat--bottom .player-seat__score i { display: inline-grid; place-items: center; }
 .player-seat--bottom .player-seat__hand { align-items: flex-end; padding: 10px 28px 0; }
-.player-seat--bottom .player-seat__card:hover { transform: none; }
+.player-seat--bottom .player-seat__card:hover,
+.player-seat--bottom .player-seat__card:focus,
+.player-seat--bottom .player-seat__card:active {
+  transform: none;
+  box-shadow: 0 calc(var(--card-w) * .08) calc(var(--card-w) * .18) rgba(0,0,0,.38), inset 0 0 0 1px rgba(0,0,0,.8);
+}
+.player-seat__card {
+  animation: none !important;
+}
 .player-seat__card.is-staged-hidden { visibility: hidden !important; pointer-events: none !important; }
 .player-seat--vertical .player-seat__hand { width: clamp(115px, 10.2vw, 196px); height: clamp(320px, 44vh, 470px); flex-direction: column; }
 .player-seat--vertical .player-seat__card + .player-seat__card { margin-top: calc(var(--card-w) * -.94); }
