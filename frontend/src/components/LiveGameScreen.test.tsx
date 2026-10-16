@@ -147,6 +147,20 @@ describe("LiveGameScreen", () => {
       });
     });
 
+    test("clicking draw pile sends draw-and-pass when that optional action is allowed", () => {
+      const onCommand = vi.fn();
+      const snapshot = createGameSnapshot({
+        allowedControls: ["play-card", "draw-and-pass"],
+      });
+      render(<LiveGameScreen onCommand={onCommand} onLeaveRoom={vi.fn()} snapshot={snapshot} />);
+
+      fireEvent.click(screen.getByRole("button", { name: /draw cards|draw pile|draw one card/i }));
+
+      expect(onCommand).toHaveBeenCalledWith({
+        type: "draw-and-pass",
+      });
+    });
+
     test("clicking accept-draw sends accept-draw when draw stack is active", () => {
       const onCommand = vi.fn();
       const snapshot = createGameSnapshot({

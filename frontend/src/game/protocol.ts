@@ -19,6 +19,7 @@ export type ClientCommand =
   | { type: "leave-room" }
   | { type: "play-card"; cardId: string; declareUno?: boolean }
   | { type: "draw-until-playable" }
+  | { type: "draw-and-pass" }
   | { type: "accept-draw" }
   | { type: "choose-color"; color: CardColor }
   | { type: "choose-swap-target"; targetPlayerId: string }

@@ -119,6 +119,7 @@ function parseCommand(input: unknown): ClientCommand | null {
     case "start-game":
     case "leave-room":
     case "draw-until-playable":
+    case "draw-and-pass":
     case "accept-draw":
     case "declare-uno":
       return hasKeys(value, ["type"]) ? { type: value.type } : null;

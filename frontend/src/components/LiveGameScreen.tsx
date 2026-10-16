@@ -55,7 +55,9 @@ export function LiveGameScreen({
 
   const topCard = snapshot.topDiscard ? findCard(snapshot.topDiscard.faceId) : null;
   const dirName = snapshot.direction === 1 ? "clockwise" : "counterclockwise";
-  const canDraw = snapshot.allowedControls.includes("draw-until-playable");
+  const canDraw = snapshot.allowedControls.includes("draw-until-playable") ||
+    snapshot.allowedControls.includes("draw-and-pass");
+  const drawAndPass = snapshot.allowedControls.includes("draw-and-pass");
   const canUno = snapshot.allowedControls.includes("declare-uno");
   const canAcceptDraw = snapshot.allowedControls.includes("accept-draw");
 
@@ -139,12 +141,12 @@ export function LiveGameScreen({
       <div className="table-center">
         <div className="play-zone">
           <button
-            aria-label="Draw cards from draw pile"
+            aria-label={drawAndPass ? "Draw one card and pass" : "Draw cards from draw pile"}
             className="pile pile--draw"
             disabled={!canDraw || isReconnecting}
             onClick={() => {
               if (canDraw && !isReconnecting) {
-                onCommand({ type: "draw-until-playable" });
+                onCommand({ type: drawAndPass ? "draw-and-pass" : "draw-until-playable" });
               }
             }}
             type="button"

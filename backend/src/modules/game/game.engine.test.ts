@@ -130,6 +130,22 @@ describe("normal turns", () => {
     expect(state).toEqual(before);
   });
 
+  test("draws one card and passes when the player chooses not to play", () => {
+    const state = fixture({ drawPile: [card("drawn", "blue-8"), card("later", "green-9")] });
+    const before = structuredClone(state);
+    const result = applyGameCommand(state, { type: "draw-and-pass", playerId: "a" });
+
+    expect(result.ok).toBe(true);
+    expect(result.state.players[0]!.hand.map(({ instanceId }) => instanceId)).toEqual([
+      "red", "number", "bad", "drawn",
+    ]);
+    expect(result.state.discardPile).toEqual(before.discardPile);
+    expect(result.state.drawPile).toEqual([card("later", "green-9")]);
+    expect(result.state.currentPlayerId).toBe("b");
+    expect(result.state.revision).toBe(1);
+    expect(state).toEqual(before);
+  });
+
   // Catches bypassing a mandatory held play through any legal match category.
   test.each([
     ["color", "red-3", "red-5"],

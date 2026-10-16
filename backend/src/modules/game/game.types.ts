@@ -81,6 +81,7 @@ export interface GameState {
 export type GameCommand =
   | { type: "play-card"; playerId: string; cardId: string; declareUno?: boolean }
   | { type: "draw-until-playable"; playerId: string }
+  | { type: "draw-and-pass"; playerId: string }
   | { type: "accept-draw"; playerId: string }
   | { type: "choose-color"; playerId: string; color: CardColor }
   | { type: "choose-swap-target"; playerId: string; targetPlayerId: string }

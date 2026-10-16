@@ -61,7 +61,7 @@ describe("private snapshots", () => {
   test("limits legal cards and normal controls to the active eligible viewer", () => {
     const state = fixture();
     expect(projectPlayerSnapshot(state, "a").legalCardIds).toEqual(["own-red"]);
-    expect(projectPlayerSnapshot(state, "a").allowedControls).toEqual(["play-card", "leave-room"]);
+    expect(projectPlayerSnapshot(state, "a").allowedControls).toEqual(["play-card", "draw-and-pass", "leave-room"]);
     state.activeColor = "yellow";
     expect(projectPlayerSnapshot(state, "b").legalCardIds).toEqual([]);
     expect(projectPlayerSnapshot(state, "b").allowedControls).toEqual(["leave-room"]);
@@ -152,7 +152,7 @@ describe("version 1 command parsing", () => {
     { type: "start-game" }, { type: "leave-room" },
     { type: "play-card", cardId: "card" }, { type: "play-card", cardId: "card", declareUno: false },
     { type: "play-card", cardId: "card", declareUno: true },
-    { type: "draw-until-playable" }, { type: "accept-draw" },
+    { type: "draw-until-playable" }, { type: "draw-and-pass" }, { type: "accept-draw" },
     { type: "choose-color", color: "red" }, { type: "choose-color", color: "yellow" },
     { type: "choose-roulette-color", color: "green" }, { type: "choose-roulette-color", color: "blue" },
     { type: "choose-swap-target", targetPlayerId: "b" }, { type: "declare-uno" },
@@ -205,7 +205,7 @@ describe("version 1 command parsing", () => {
   });
 
   // Catches command variants accidentally accepting actor identity or arbitrary extra keys.
-  test.each(["start-game", "leave-room", "draw-until-playable", "accept-draw", "declare-uno"])("strictly validates payload-free %s", (type) => {
+  test.each(["start-game", "leave-room", "draw-until-playable", "draw-and-pass", "accept-draw", "declare-uno"])("strictly validates payload-free %s", (type) => {
     for (const key of ["playerId", "actorId", "color", "cardId", "targetPlayerId"]) {
       expect(parseClientMessage(envelope({ type, [key]: "x" }))).toEqual({ ok: false, code: "INVALID_MESSAGE" });
     }

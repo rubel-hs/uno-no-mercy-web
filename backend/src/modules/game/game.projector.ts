@@ -20,7 +20,8 @@ export function projectPlayerSnapshot(state: GameState, viewerId: string): Playe
     if (legalCardIds.length > 0) allowedControls.push("play-card");
     if (state.phase === "playing" && state.pendingChoice === null && state.currentPlayerId === viewerId) {
       if (state.drawStack) allowedControls.push("accept-draw");
-      else if (legalCardIds.length === 0) allowedControls.push("draw-until-playable");
+      else if (legalCardIds.length > 0) allowedControls.push("draw-and-pass");
+      else allowedControls.push("draw-until-playable");
     }
     if (pendingChoice?.playerId === viewerId && (pendingChoice.type !== "choose-swap-target" ||
       state.players.some(({ id, eliminated }) => id !== viewerId && !eliminated))) allowedControls.push(pendingChoice.type);

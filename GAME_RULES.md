@@ -5,13 +5,15 @@
 - Shuffle all 168 cards.
 - Deal 7 cards to each player.
 - Place the remaining cards face down as the draw pile.
-- Turn over the top card to start the discard pile. If it is an action card, turn over another card.
+- Turn over cards until a number card is face-up to start the discard pile. Leave any action cards in the discard pile and continue flipping.
 - The player to the dealer's left starts. Play proceeds clockwise.
 
 ## 2. How to Play
 - On your turn, play one card matching the top discard card by color, number, or symbol.
 - Wild cards can generally be played regardless of the current color.
-- If you have no playable card, draw cards until you draw one you can play, then play it.
+- **Draw Until You Can Play:** If you do not have a card that matches the top discard card by color, number, or symbol, you must draw cards from the draw pile one at a time until you draw a playable card.
+- **Instant Play:** As soon as you draw a playable card, you must play it immediately; this ends your turn. This rule can make hands grow very quickly.
+- If you have a playable card but choose not to play it, you may draw exactly one card and pass your turn without playing it.
 - Follow the effect of any action card you play.
 - When you have one card left, shout "UNO!"
 - If another player catches you failing to call UNO before the next player starts their turn, draw 2 cards.
@@ -42,7 +44,7 @@
 | Draw 4 (+4) | The next player draws 4 cards and loses their turn. |
 | Skip | The next player loses their turn. |
 | Reverse | Changes the direction of play. With 2 players, it acts as a Skip. |
-| Discard All | Discard all cards in your hand matching the played card's color, including the card just played. |
+| Discard All | Discard all other cards in your hand matching the played card's color. |
 | Skip Everyone | Skip all other players and take another turn. |
 | Wild Draw 6 (+6) | Choose the continuing color. The next player draws 6 cards and loses their turn. |
 | Wild Draw 10 (+10) | Choose the continuing color. The next player draws 10 cards and loses their turn. |
@@ -58,7 +60,16 @@ There are two ways to win:
 
 If the draw pile runs out, reshuffle the discard pile (leaving its top card in place) to create a new draw pile.
 
-## 6. Quick Reminders
+## 6. Optional Scoring
+
+For a multi-round game, the winner of each round may score the cards left in the other players' hands. The first player to reach 1,000 points wins the match.
+
+- Number cards are worth their face value.
+- Colored action cards are worth 20 points each.
+- Wild action cards are worth 50 points each.
+- Eliminating another player is worth 250 points; do not count cards in an eliminated player's hand.
+
+## 7. Quick Reminders
 - Match by color, number, or symbol.
 - Call UNO when you have one card remaining.
 - Stack draw cards to pass accumulated penalties.

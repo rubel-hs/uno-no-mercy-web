@@ -243,7 +243,7 @@ export function applyGameCommand(state: GameState, command: GameCommand): GameTr
     return { ok: true, state: next, events };
   }
   if (state.phase !== "playing" || state.pendingChoice !== null ||
-      (command.type === "draw-until-playable" && state.drawStack !== null) ||
+      ((command.type === "draw-until-playable" || command.type === "draw-and-pass") && state.drawStack !== null) ||
       (command.type === "accept-draw" && state.drawStack === null)) {
     return { ok: false, code: "invalid-phase", state };
   }
@@ -251,6 +251,9 @@ export function applyGameCommand(state: GameState, command: GameCommand): GameTr
   if (command.playerId !== state.currentPlayerId || !player) return { ok: false, code: "out-of-turn", state };
   if (command.type === "draw-until-playable" && player.hand.some((card) => isPlayable(state, card))) {
     return { ok: false, code: "playable-card-in-hand", state };
+  }
+  if (command.type === "draw-and-pass" && !player.hand.some((card) => isPlayable(state, card))) {
+    return { ok: false, code: "invalid-phase", state };
   }
   let selected: PhysicalCard | undefined;
   if (command.type === "play-card") {
@@ -274,6 +277,15 @@ export function applyGameCommand(state: GameState, command: GameCommand): GameTr
     next.drawStack = null;
     events.push({ type: "cards-drawn", playerId: command.playerId, cardIds: drawnIds });
     if (!next.winner) advanceTurn(next, events);
+    next.revision++;
+    return { ok: true, state: next, events };
+  }
+  if (command.type === "draw-and-pass") {
+    const drawn = drawCard(next);
+    if (!drawn) return { ok: false, code: "deck-exhausted", state };
+    next.players.find(({ id }) => id === command.playerId)!.hand.push(drawn);
+    events.push({ type: "cards-drawn", playerId: command.playerId, cardIds: [drawn.instanceId] });
+    advanceTurn(next, events);
     next.revision++;
     return { ok: true, state: next, events };
   }
