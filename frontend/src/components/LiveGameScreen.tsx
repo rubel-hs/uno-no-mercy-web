@@ -21,6 +21,80 @@ export interface LiveGameScreenProps {
 
 const DEFAULT_FLIGHT_DURATION = 0.28;
 
+function getViewportDimensions(): { width: number; height: number } {
+  if (typeof window !== "undefined" && window.innerWidth > 0 && window.innerHeight > 0) {
+    return { width: window.innerWidth, height: window.innerHeight };
+  }
+  return { width: 800, height: 750 };
+}
+
+function getDefaultCoordinates(type: "opponent" | "draw" | "discard" | "hand" | "card") {
+  const { width, height } = getViewportDimensions();
+  switch (type) {
+    case "opponent":
+      return {
+        x: Math.round(width / 2 - 40),
+        y: Math.round(Math.min(100, height * 0.12)),
+        width: 80,
+        height: 120,
+      };
+    case "draw":
+      return {
+        x: Math.round(width / 2 - 90),
+        y: Math.round(height * 0.42),
+        width: 80,
+        height: 120,
+      };
+    case "discard":
+      return {
+        x: Math.round(width / 2 + 10),
+        y: Math.round(height * 0.42),
+        width: 80,
+        height: 120,
+      };
+    case "hand":
+      return {
+        x: Math.round(Math.max(10, width / 2 - 200)),
+        y: Math.round(Math.max(200, height - 160)),
+        width: Math.min(width - 20, 400),
+        height: 120,
+      };
+    case "card":
+      return {
+        x: Math.round(width / 2 - 40),
+        y: Math.round(Math.max(200, height - 160)),
+        width: 80,
+        height: 120,
+      };
+  }
+}
+
+function getSeatElementCoordinates(
+  seatEl: Element | null,
+  fallback: { x: number; y: number; width: number; height: number },
+): { x: number; y: number; width: number; height: number } {
+  if (!seatEl) return fallback;
+  const candidates = [
+    seatEl.querySelector(".player-seat__card"),
+    seatEl.querySelector(".player-seat__card-count"),
+    seatEl.querySelector(".player-seat__hand"),
+    seatEl,
+  ];
+  for (const el of candidates) {
+    if (!el) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width > 0 || rect.height > 0) {
+      return {
+        x: rect.x ?? rect.left ?? fallback.x,
+        y: rect.y ?? rect.top ?? fallback.y,
+        width: Math.min(rect.width || fallback.width, 80),
+        height: Math.min(rect.height || fallback.height, 120),
+      };
+    }
+  }
+  return fallback;
+}
+
 function getElementCoordinates(
   element: Element | null,
   fallback: { x: number; y: number; width: number; height: number },
@@ -168,31 +242,18 @@ export function LiveGameScreen({
           if (cardCountDecreased && currentDiscardFaceId) {
             const cardToFly = findCard(currentDiscardFaceId);
             const opponentSeatEl =
+              document.querySelector(`.opponents-strip [data-player-id="${prevActiveId}"]`) ||
               document.querySelector(`[data-player-id="${prevActiveId}"]`) ||
               document.querySelector(`.player-seat[aria-label*="${prevOpponent.name}"]`);
-            const cardOrHandEl =
-              opponentSeatEl?.querySelector(".player-seat__card") ||
-              opponentSeatEl?.querySelector(".player-seat__hand") ||
-              opponentSeatEl;
 
-            const rawFromRect = getElementCoordinates(cardOrHandEl, {
-              x: 300,
-              y: 100,
-              width: 80,
-              height: 120,
-            });
-            const fromRect = {
-              x: rawFromRect.x,
-              y: rawFromRect.y,
-              width: Math.min(rawFromRect.width, 80),
-              height: Math.min(rawFromRect.height, 120),
-            };
-            const toRect = getElementCoordinates(discardPileRef.current, {
-              x: 400,
-              y: 300,
-              width: 80,
-              height: 120,
-            });
+            const fromRect = getSeatElementCoordinates(
+              opponentSeatEl,
+              getDefaultCoordinates("opponent"),
+            );
+            const toRect = getElementCoordinates(
+              discardPileRef.current,
+              getDefaultCoordinates("discard"),
+            );
 
             const flightId = `flight-opponent-${prevActiveId}-${Date.now()}`;
             newFlights.push({
@@ -251,20 +312,16 @@ export function LiveGameScreen({
         const newCardIds = newlyDrawnCards.map((c) => c.instanceId);
         setHiddenCardIds((prev) => [...prev, ...newCardIds]);
 
-        const drawFromRect = getElementCoordinates(drawPileRef.current, {
-          x: 250,
-          y: 300,
-          width: 80,
-          height: 120,
-        });
+        const drawFromRect = getElementCoordinates(
+          drawPileRef.current,
+          getDefaultCoordinates("draw"),
+        );
 
         const bottomHandEl = document.querySelector(".player-seat--bottom .player-seat__hand");
-        const handRect = getElementCoordinates(bottomHandEl, {
-          x: 300,
-          y: 600,
-          width: 400,
-          height: 120,
-        });
+        const handRect = getElementCoordinates(
+          bottomHandEl,
+          getDefaultCoordinates("hand"),
+        );
 
         newlyDrawnCards.forEach((cardItem, index) => {
           const cardDef = findCard(cardItem.faceId);
@@ -298,30 +355,17 @@ export function LiveGameScreen({
           if (prevPlayer && player.cardCount > prevPlayer.cardCount) {
             const countDrawn = player.cardCount - prevPlayer.cardCount;
             const opponentSeatEl =
+              document.querySelector(`.opponents-strip [data-player-id="${player.id}"]`) ||
               document.querySelector(`[data-player-id="${player.id}"]`) ||
               document.querySelector(`.player-seat[aria-label*="${player.name}"]`);
-            const cardOrHandEl =
-              opponentSeatEl?.querySelector(".player-seat__card") ||
-              opponentSeatEl?.querySelector(".player-seat__hand") ||
-              opponentSeatEl;
-            const rawToRect = getElementCoordinates(cardOrHandEl, {
-              x: 300,
-              y: 100,
-              width: 80,
-              height: 120,
-            });
-            const toRect = {
-              x: rawToRect.x,
-              y: rawToRect.y,
-              width: Math.min(rawToRect.width, 80),
-              height: Math.min(rawToRect.height, 120),
-            };
-            const drawFromRect = getElementCoordinates(drawPileRef.current, {
-              x: 250,
-              y: 300,
-              width: 80,
-              height: 120,
-            });
+            const toRect = getSeatElementCoordinates(
+              opponentSeatEl,
+              getDefaultCoordinates("opponent"),
+            );
+            const drawFromRect = getElementCoordinates(
+              drawPileRef.current,
+              getDefaultCoordinates("draw"),
+            );
 
             for (let i = 0; i < countDrawn; i++) {
               newFlights.push({
@@ -412,18 +456,22 @@ export function LiveGameScreen({
       setHiddenCardInstanceId(cardId);
 
       const cardElement = document.querySelector(`[data-card-instance-id="${cardId}"]`);
-      const fromRect = getElementCoordinates(cardElement, {
-        x: 300,
-        y: 600,
-        width: 80,
-        height: 120,
-      });
-      const toRect = getElementCoordinates(discardPileRef.current, {
-        x: 400,
-        y: 300,
-        width: 80,
-        height: 120,
-      });
+      const bottomHandEl = document.querySelector(".player-seat--bottom .player-seat__hand");
+      const defaultCardFallback = getDefaultCoordinates("card");
+      const handFallback =
+        bottomHandEl && bottomHandEl.getBoundingClientRect().height > 0
+          ? {
+              x: bottomHandEl.getBoundingClientRect().left,
+              y: bottomHandEl.getBoundingClientRect().top,
+              width: 80,
+              height: 120,
+            }
+          : defaultCardFallback;
+      const fromRect = getElementCoordinates(cardElement, handFallback);
+      const toRect = getElementCoordinates(
+        discardPileRef.current,
+        getDefaultCoordinates("discard"),
+      );
 
       const flightId = `flight-play-${cardId}-${Date.now()}`;
       const newFlight: FlightRequest = {
@@ -453,20 +501,16 @@ export function LiveGameScreen({
       setRevealedCount(nextRevealedCount);
 
       const cardDef = findCard(currentItem.faceId);
-      const drawFromRect = getElementCoordinates(drawPileRef.current, {
-        x: 250,
-        y: 300,
-        width: 80,
-        height: 120,
-      });
+      const drawFromRect = getElementCoordinates(
+        drawPileRef.current,
+        getDefaultCoordinates("draw"),
+      );
 
       if (currentItem.isAutoThrow) {
-        const toRect = getElementCoordinates(discardPileRef.current, {
-          x: 400,
-          y: 300,
-          width: 80,
-          height: 120,
-        });
+        const toRect = getElementCoordinates(
+          discardPileRef.current,
+          getDefaultCoordinates("discard"),
+        );
 
         const flightId = `flight-autothrow-${currentItem.instanceId}-${Date.now()}`;
         setActiveFlights((prev) => [
@@ -484,12 +528,10 @@ export function LiveGameScreen({
         setRevealedCount(0);
       } else {
         const bottomHandEl = document.querySelector(".player-seat--bottom .player-seat__hand");
-        const handRect = getElementCoordinates(bottomHandEl, {
-          x: 300,
-          y: 600,
-          width: 400,
-          height: 120,
-        });
+        const handRect = getElementCoordinates(
+          bottomHandEl,
+          getDefaultCoordinates("hand"),
+        );
 
         const flightId = `flight-draw-step-${currentItem.instanceId}-${Date.now()}`;
         setActiveFlights((prev) => [

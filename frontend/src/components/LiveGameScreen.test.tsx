@@ -1121,5 +1121,225 @@ describe("LiveGameScreen", () => {
 
       expect(mediaRule).toBeDefined();
     });
+
+    it("correctly locates opponent seat in opponents-strip for card flight coordinates", () => {
+      const sampleSnapshot = createGameSnapshot({ viewerId: "p2" });
+      render(
+        <LiveGameScreen
+          onCommand={vi.fn()}
+          onLeaveRoom={vi.fn()}
+          snapshot={sampleSnapshot}
+        />,
+      );
+      const opponentSeat = document.querySelector('.opponents-strip [data-player-id="p1"]');
+      expect(opponentSeat).toBeInTheDocument();
+      expect(opponentSeat?.closest(".opponents-strip")).not.toBeNull();
+    });
+
+    it("resolves flight source coordinates from opponent seat in opponents-strip when opponent plays a card", () => {
+      const initialSnapshot = createGameSnapshot({
+        viewerId: "p2",
+        currentPlayerId: "p1",
+        topDiscard: { faceId: "red-5" },
+        players: [
+          { id: "p1", name: "Alice", order: 0, cardCount: 4, online: true, eliminated: false },
+          { id: "p2", name: "Bob", order: 1, cardCount: 5, online: true, eliminated: false },
+        ],
+      });
+
+      const { rerender } = render(
+        <LiveGameScreen
+          onCommand={vi.fn()}
+          onLeaveRoom={vi.fn()}
+          snapshot={initialSnapshot}
+        />,
+      );
+
+      const opponentSeat = document.querySelector('.opponents-strip [data-player-id="p1"]') as HTMLElement;
+      expect(opponentSeat).toBeInTheDocument();
+
+      // Mock opponent seat with non-zero portrait dimensions
+      vi.spyOn(opponentSeat, "getBoundingClientRect").mockReturnValue({
+        x: 120,
+        y: 15,
+        left: 120,
+        top: 15,
+        right: 200,
+        bottom: 65,
+        width: 80,
+        height: 50,
+        toJSON: () => {},
+      });
+
+      // Cards inside opponent seat are hidden in portrait (0x0 rect)
+      const miniCards = opponentSeat.querySelectorAll(".player-seat__card");
+      miniCards.forEach((c) => {
+        vi.spyOn(c, "getBoundingClientRect").mockReturnValue({
+          x: 0,
+          y: 0,
+          left: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: 0,
+          height: 0,
+          toJSON: () => {},
+        });
+      });
+
+      // Rerender with snapshot where p1 played red-7
+      const nextSnapshot = {
+        ...initialSnapshot,
+        revision: initialSnapshot.revision + 1,
+        currentPlayerId: "p2",
+        topDiscard: { faceId: "red-7" },
+        players: [
+          { id: "p1", name: "Alice", order: 0, cardCount: 3, online: true, eliminated: false },
+          { id: "p2", name: "Bob", order: 1, cardCount: 5, online: true, eliminated: false },
+        ],
+      };
+
+      rerender(
+        <LiveGameScreen
+          onCommand={vi.fn()}
+          onLeaveRoom={vi.fn()}
+          snapshot={nextSnapshot}
+        />,
+      );
+
+      const flightElement = document.querySelector('[data-testid^="card-flight-flight-opponent-p1-"]') as HTMLElement;
+      expect(flightElement).toBeInTheDocument();
+      // Bounding rect from opponentSeat (height: 50) must be reflected in flight element style
+      expect(flightElement.style.height).toBe("50px");
+    });
+
+    it("resolves flight target coordinates to opponent seat in opponents-strip when opponent draws cards", () => {
+      const initialSnapshot = createGameSnapshot({
+        viewerId: "p2",
+        currentPlayerId: "p1",
+        drawCount: 120,
+        players: [
+          { id: "p1", name: "Alice", order: 0, cardCount: 4, online: true, eliminated: false },
+          { id: "p2", name: "Bob", order: 1, cardCount: 5, online: true, eliminated: false },
+        ],
+      });
+
+      const { rerender } = render(
+        <LiveGameScreen
+          onCommand={vi.fn()}
+          onLeaveRoom={vi.fn()}
+          snapshot={initialSnapshot}
+        />,
+      );
+
+      const opponentSeat = document.querySelector('.opponents-strip [data-player-id="p1"]') as HTMLElement;
+      expect(opponentSeat).toBeInTheDocument();
+
+      vi.spyOn(opponentSeat, "getBoundingClientRect").mockReturnValue({
+        x: 120,
+        y: 15,
+        left: 120,
+        top: 15,
+        right: 200,
+        bottom: 65,
+        width: 80,
+        height: 50,
+        toJSON: () => {},
+      });
+
+      const miniCards = opponentSeat.querySelectorAll(".player-seat__card");
+      miniCards.forEach((c) => {
+        vi.spyOn(c, "getBoundingClientRect").mockReturnValue({
+          x: 0,
+          y: 0,
+          left: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: 0,
+          height: 0,
+          toJSON: () => {},
+        });
+      });
+
+      // Opponent draws a card
+      const nextSnapshot = {
+        ...initialSnapshot,
+        revision: initialSnapshot.revision + 1,
+        drawCount: 119,
+        players: [
+          { id: "p1", name: "Alice", order: 0, cardCount: 5, online: true, eliminated: false },
+          { id: "p2", name: "Bob", order: 1, cardCount: 5, online: true, eliminated: false },
+        ],
+      };
+
+      rerender(
+        <LiveGameScreen
+          onCommand={vi.fn()}
+          onLeaveRoom={vi.fn()}
+          snapshot={nextSnapshot}
+        />,
+      );
+
+      const flightElement = document.querySelector('[data-testid^="card-flight-flight-draw-opponent-p1-"]') as HTMLElement;
+      expect(flightElement).toBeInTheDocument();
+    });
+
+    it("ensures vertical fallback coordinates maintain top-to-bottom continuity in mobile portrait", () => {
+      const originalInnerWidth = window.innerWidth;
+      const originalInnerHeight = window.innerHeight;
+      window.innerWidth = 375;
+      window.innerHeight = 812;
+
+      try {
+        const initialSnapshot = createGameSnapshot({
+          viewerId: "p2",
+          currentPlayerId: "p1",
+          topDiscard: { faceId: "red-5" },
+          players: [
+            { id: "p1", name: "Alice", order: 0, cardCount: 4, online: true, eliminated: false },
+            { id: "p2", name: "Bob", order: 1, cardCount: 5, online: true, eliminated: false },
+          ],
+        });
+
+        const { rerender } = render(
+          <LiveGameScreen
+            onCommand={vi.fn()}
+            onLeaveRoom={vi.fn()}
+            snapshot={initialSnapshot}
+          />,
+        );
+
+        // When elements have 0x0 size (e.g. unmeasured/transitioning), fallback coordinates are used
+        const nextSnapshot = {
+          ...initialSnapshot,
+          revision: initialSnapshot.revision + 1,
+          currentPlayerId: "p2",
+          topDiscard: { faceId: "red-7" },
+          players: [
+            { id: "p1", name: "Alice", order: 0, cardCount: 3, online: true, eliminated: false },
+            { id: "p2", name: "Bob", order: 1, cardCount: 5, online: true, eliminated: false },
+          ],
+        };
+
+        rerender(
+          <LiveGameScreen
+            onCommand={vi.fn()}
+            onLeaveRoom={vi.fn()}
+            snapshot={nextSnapshot}
+          />,
+        );
+
+        const flightElement = document.querySelector('[data-testid^="card-flight-flight-opponent-p1-"]') as HTMLElement;
+        expect(flightElement).toBeInTheDocument();
+        const styleWidth = parseFloat(flightElement.style.width);
+        expect(styleWidth).toBeLessThanOrEqual(375);
+      } finally {
+        window.innerWidth = originalInnerWidth;
+        window.innerHeight = originalInnerHeight;
+      }
+    });
   });
 });
+
+
