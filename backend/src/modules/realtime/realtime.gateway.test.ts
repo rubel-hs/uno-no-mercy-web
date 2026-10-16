@@ -191,6 +191,21 @@ describe("public match snapshots", () => {
     expect(snapshot(room.peers[1]!.transport).scores).toContainEqual({ playerId: room.seats[0]!.playerId, points: 124 });
   });
 
+  // Catches advertising a next round that the retained-seat minimum would reject.
+  test("omits next-round control when departures leave only the host seat", () => {
+    const room = matchFixture();
+    room.command(0, { type: "start-game" });
+    room.finish();
+    room.command(1, { type: "leave-room" });
+    expect(snapshot(room.peers[0]!.transport).allowedControls).toContain("start-next-round");
+
+    room.command(2, { type: "leave-room" });
+    expect(room.store.getRoom("ABCDEF")!.players.map(({ id }) => id)).toEqual([room.seats[0]!.playerId]);
+    const projected = snapshot(room.peers[0]!.transport);
+    expect(projected).toMatchObject({ viewerId: room.seats[0]!.playerId, hostPlayerId: room.seats[0]!.playerId, matchStatus: "round-complete" });
+    expect(projected.allowedControls).not.toContain("start-next-round");
+  });
+
   test("publishes final match winner and standings to every viewer without next-round control", () => {
     const hands = [winningHand, Array<string>(7).fill("wild-reverse-draw-4"), Array<string>(7).fill("wild-color-roulette"),
       ["wild-reverse-draw-4", "wild-color-roulette", "wild-draw-6", "wild-draw-6", "wild-draw-6", "wild-draw-6", "wild-draw-10"]];

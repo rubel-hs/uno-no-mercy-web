@@ -140,7 +140,7 @@ export function createRoomStore(overrides: Partial<RoomStoreDeps> = {}): RoomSto
   function snapshot(room: Room, viewerId: string): PlayerSnapshot {
     if (room.game) {
       const projected = projectPlayerSnapshot(gameWithMetadata(room), viewerId, room.match);
-      if (viewerId === room.hostPlayerId && room.match.status === "round-complete") projected.allowedControls.push("start-next-round");
+      if (viewerId === room.hostPlayerId && room.match.status === "round-complete" && room.seats.size >= 2) projected.allowedControls.push("start-next-round");
       return { ...projected, roomCode: room.code, hostPlayerId: room.hostPlayerId };
     }
     return {
