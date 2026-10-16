@@ -909,7 +909,7 @@ describe("LiveGameScreen", () => {
       const initialSnapshot = createGameSnapshot({
         hand: [{ instanceId: "card-1", faceId: "red-5" }],
         allowedControls: ["draw-until-playable"],
-        topDiscard: { instanceId: "d-prev", faceId: "blue-1" },
+        topDiscard: { faceId: "blue-1" },
       });
 
       const { rerender } = render(
@@ -924,7 +924,7 @@ describe("LiveGameScreen", () => {
         ],
         drawCount: 118,
         allowedControls: [],
-        topDiscard: { instanceId: "card-draw-2", faceId: "blue-7" },
+        topDiscard: { faceId: "blue-7" },
       });
 
       rerender(
@@ -935,8 +935,8 @@ describe("LiveGameScreen", () => {
       const drawButton = screen.getByRole("button", { name: /draw next|click to draw/i });
       expect(drawButton).toBeInTheDocument();
 
-      const bottomSeat = document.querySelector(".player-seat--bottom")!;
-      const discardPile = document.querySelector(".pile--discard")!;
+      const bottomSeat = document.querySelector(".player-seat--bottom") as HTMLElement;
+      const discardPile = document.querySelector(".pile--discard") as HTMLElement;
 
       // Click to draw the hand card
       fireEvent.click(drawButton);
@@ -952,7 +952,7 @@ describe("LiveGameScreen", () => {
       const initialSnapshot = createGameSnapshot({
         hand: [{ instanceId: "card-1", faceId: "blue-2" }],
         pendingChoice: { type: "choose-roulette-color", playerId: "p1" },
-        topDiscard: { instanceId: "d-roulette", faceId: "wild-color-roulette" },
+        topDiscard: { faceId: "wild-color-roulette" },
       });
 
       const { rerender } = render(
@@ -969,7 +969,7 @@ describe("LiveGameScreen", () => {
         drawCount: 117,
         activeColor: "red",
         pendingChoice: null,
-        topDiscard: { instanceId: "draw-r3", faceId: "red-9" },
+        topDiscard: { faceId: "red-9" },
       });
 
       rerender(
@@ -979,8 +979,8 @@ describe("LiveGameScreen", () => {
       const drawButton = screen.getByRole("button", { name: /draw next|click to draw/i });
       expect(drawButton).toBeInTheDocument();
 
-      const bottomSeat = document.querySelector(".player-seat--bottom")!;
-      const discardPile = document.querySelector(".pile--discard")!;
+      const bottomSeat = document.querySelector(".player-seat--bottom") as HTMLElement;
+      const discardPile = document.querySelector(".pile--discard") as HTMLElement;
 
       // Card 1: yellow 3
       fireEvent.click(drawButton);

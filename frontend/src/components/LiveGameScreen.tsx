@@ -140,13 +140,10 @@ export function LiveGameScreen({
       return;
     }
 
-    const prevDiscardId = prevSnapshot.topDiscard?.instanceId ?? prevSnapshot.topDiscard?.faceId;
-    const currentDiscardId = snapshot.topDiscard?.instanceId ?? snapshot.topDiscard?.faceId;
     const prevDiscardFaceId = prevSnapshot.topDiscard?.faceId;
     const currentDiscardFaceId = snapshot.topDiscard?.faceId;
     const discardChanged = Boolean(
-      (currentDiscardId && currentDiscardId !== prevDiscardId) ||
-        (currentDiscardFaceId && currentDiscardFaceId !== prevDiscardFaceId),
+      currentDiscardFaceId && currentDiscardFaceId !== prevDiscardFaceId,
     );
 
     const isGameplay =
@@ -237,7 +234,7 @@ export function LiveGameScreen({
           }));
         if (discardChanged && snapshot.topDiscard) {
           queue.push({
-            instanceId: snapshot.topDiscard.instanceId ?? snapshot.topDiscard.faceId,
+            instanceId: `discard-${snapshot.topDiscard.faceId}-${snapshot.revision}`,
             faceId: snapshot.topDiscard.faceId,
             isAutoThrow: true,
           });
