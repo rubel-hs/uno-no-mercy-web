@@ -318,13 +318,12 @@ describe("multiplayer room and lobby flow", () => {
       fireEvent.change(screen.getByLabelText(/your name|display name/i), { target: { value: "Bob" } });
       fireEvent.click(screen.getByRole("button", { name: "Confirm join room" }));
 
+      // Non-host: Start game button is not present, waiting text is shown
       await waitFor(() => {
         expect(screen.getByText("ABCDEF")).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /start game/i })).not.toBeInTheDocument();
+        expect(screen.getByText(/waiting for host/i)).toBeInTheDocument();
       });
-
-      // Non-host: Start game button is not present, waiting text is shown
-      expect(screen.queryByRole("button", { name: /start game/i })).not.toBeInTheDocument();
-      expect(screen.getByText(/waiting for host/i)).toBeInTheDocument();
     });
 
     test("intentional leave returns home and clears session storage", async () => {
