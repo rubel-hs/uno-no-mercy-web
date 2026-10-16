@@ -8,8 +8,31 @@ type WithoutActor<T> = T extends { playerId: string } ? Omit<T, "playerId"> : ne
 
 export type ClientCommand =
   | { type: "start-game" }
+  | { type: "start-next-round" }
   | { type: "leave-room" }
   | WithoutActor<GameCommand>;
+
+export type MatchStatus = "lobby" | "round-active" | "round-complete" | "match-complete";
+
+export interface PlayerScore {
+  playerId: string;
+  points: number;
+}
+
+export interface RoundScoreBreakdown {
+  playerId: string;
+  cardPoints: number;
+  eliminationBonus: number;
+  roundPoints: number;
+  cumulativePoints: number;
+}
+
+export interface RoundResult {
+  roundNumber: number;
+  winnerId: string;
+  breakdown: RoundScoreBreakdown[];
+  matchWinnerId: string | null;
+}
 
 export interface ClientEnvelope {
   version: 1;
@@ -39,6 +62,8 @@ export type CommandErrorCode =
   | "NOT_AUTHENTICATED"
   | "NOT_HOST"
   | "NOT_ENOUGH_PLAYERS"
+  | "round-not-complete"
+  | "match-complete"
   | "PLAYER_NOT_FOUND"
   | "STALE_REVISION"
   | "DUPLICATE_COMMAND"
@@ -76,6 +101,13 @@ export interface PlayerSnapshot {
   winner: string | null;
   legalCardIds: string[];
   allowedControls: ClientCommand["type"][];
+  /** Public match data; optional while older room snapshots are projected without a match. */
+  matchStatus?: MatchStatus;
+  roundNumber?: number;
+  targetScore?: 1000;
+  scores?: PlayerScore[];
+  roundResult?: RoundResult | null;
+  matchWinner?: string | null;
 }
 
 export type ServerMessage =
@@ -117,6 +149,7 @@ function parseCommand(input: unknown): ClientCommand | null {
   if (!value) return null;
   switch (value.type) {
     case "start-game":
+    case "start-next-round":
     case "leave-room":
     case "draw-until-playable":
     case "draw-and-pass":

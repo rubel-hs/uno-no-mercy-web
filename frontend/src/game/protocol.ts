@@ -1,5 +1,27 @@
 export type CardColor = "red" | "yellow" | "green" | "blue";
 
+export type MatchStatus = "lobby" | "round-active" | "round-complete" | "match-complete";
+
+export interface PlayerScore {
+  playerId: string;
+  points: number;
+}
+
+export interface RoundScoreBreakdown {
+  playerId: string;
+  cardPoints: number;
+  eliminationBonus: number;
+  roundPoints: number;
+  cumulativePoints: number;
+}
+
+export interface RoundResult {
+  roundNumber: number;
+  winnerId: string;
+  breakdown: RoundScoreBreakdown[];
+  matchWinnerId: string | null;
+}
+
 export interface PhysicalCard {
   instanceId: string;
   faceId: string;
@@ -16,6 +38,7 @@ export interface PublicPlayer {
 
 export type ClientCommand =
   | { type: "start-game" }
+  | { type: "start-next-round" }
   | { type: "leave-room" }
   | { type: "play-card"; cardId: string; declareUno?: boolean }
   | { type: "draw-until-playable" }
@@ -62,6 +85,8 @@ export type CommandErrorCode =
   | "NOT_AUTHENTICATED"
   | "NOT_HOST"
   | "NOT_ENOUGH_PLAYERS"
+  | "round-not-complete"
+  | "match-complete"
   | "PLAYER_NOT_FOUND"
   | "STALE_REVISION"
   | "DUPLICATE_COMMAND"
@@ -89,6 +114,12 @@ export interface PlayerSnapshot {
   winner: string | null;
   legalCardIds: string[];
   allowedControls: ClientCommand["type"][];
+  matchStatus?: MatchStatus;
+  roundNumber?: number;
+  targetScore?: 1000;
+  scores?: PlayerScore[];
+  roundResult?: RoundResult | null;
+  matchWinner?: string | null;
 }
 
 export type ServerMessage =

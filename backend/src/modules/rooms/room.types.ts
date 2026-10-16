@@ -1,5 +1,17 @@
 import type { CommandErrorCode, ServerMessage } from "../game/game.protocol";
 import type { GameState } from "../game/game.types";
+import type { MatchStatus, RoundResult } from "../game/game.protocol";
+
+export interface MatchState {
+  status: MatchStatus;
+  roundNumber: number;
+  targetScore: 1000;
+  scoresByPlayerId: Record<string, number>;
+  lastRoundResult: RoundResult | null;
+  winner: string | null;
+  finalizedRoundNumber: number | null;
+  dealerIndex: number;
+}
 
 export interface RoomPeer {
   id: string;

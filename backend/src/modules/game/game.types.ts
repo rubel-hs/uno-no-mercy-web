@@ -41,6 +41,7 @@ export interface GamePlayer {
   online?: boolean;
   hand: PhysicalCard[];
   eliminated: boolean;
+  eliminatedByPlayerId: string | null;
 }
 
 export type PendingChoice =
