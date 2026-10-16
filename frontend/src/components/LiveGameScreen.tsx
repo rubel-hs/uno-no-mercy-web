@@ -57,9 +57,11 @@ export function LiveGameScreen({
   const isReconnecting = connectionState === "reconnecting";
 
   const discardPileRef = useRef<HTMLDivElement | null>(null);
+  const drawPileRef = useRef<HTMLButtonElement | null>(null);
   const [activeFlights, setActiveFlights] = useState<FlightRequest[]>([]);
   const activeFlightsRef = useRef<FlightRequest[]>([]);
   const [hiddenCardInstanceId, setHiddenCardInstanceId] = useState<string | null>(null);
+  const [hiddenCardIds, setHiddenCardIds] = useState<string[]>([]);
   const stagedHandCardRef = useRef<{ instanceId: string; faceId: string; index: number } | null>(null);
   const playedCardRef = useRef<CardDefinition | null>(null);
   const snapshotRef = useRef<PlayerSnapshot>(snapshot);
@@ -69,6 +71,18 @@ export function LiveGameScreen({
     snapshot.topDiscard ? findCard(snapshot.topDiscard.faceId) : null,
   );
 
+  const flushFlights = useCallback(() => {
+    setActiveFlights([]);
+    activeFlightsRef.current = [];
+    setHiddenCardIds([]);
+    setHiddenCardInstanceId(null);
+    stagedHandCardRef.current = null;
+    playedCardRef.current = null;
+    if (snapshotRef.current.topDiscard) {
+      setVisualTopDiscard(findCard(snapshotRef.current.topDiscard.faceId));
+    }
+  }, []);
+
   const handleFlightEnd = useCallback((flightId: string) => {
     setActiveFlights((prev) => {
       const next = prev.filter((f) => f.id !== flightId);
@@ -77,7 +91,9 @@ export function LiveGameScreen({
         (f) => f.id.startsWith("flight-play-") || f.id.startsWith("flight-opponent-"),
       );
       if (!remainingDiscardFlight) {
-        if (snapshotRef.current.topDiscard) {
+        if (flightId.startsWith("flight-play-") && playedCardRef.current) {
+          setVisualTopDiscard(playedCardRef.current);
+        } else if (snapshotRef.current.topDiscard) {
           setVisualTopDiscard(findCard(snapshotRef.current.topDiscard.faceId));
         } else if (playedCardRef.current) {
           setVisualTopDiscard(playedCardRef.current);
@@ -89,6 +105,12 @@ export function LiveGameScreen({
     if (flightId.startsWith("flight-play-")) {
       setHiddenCardInstanceId(null);
       stagedHandCardRef.current = null;
+      playedCardRef.current = null;
+    }
+
+    if (flightId.startsWith("flight-draw-viewer-")) {
+      const instanceId = flightId.slice("flight-draw-viewer-".length);
+      setHiddenCardIds((prev) => prev.filter((id) => id !== instanceId));
     }
   }, []);
 
@@ -108,55 +130,155 @@ export function LiveGameScreen({
     const currentDiscardId = snapshot.topDiscard?.faceId;
     const discardChanged = currentDiscardId && currentDiscardId !== prevDiscardId;
 
-    if (discardChanged) {
-      const prevActiveId = prevSnapshot.currentPlayerId;
-      if (prevActiveId && prevActiveId !== snapshot.viewerId) {
-        const prevOpponent = prevSnapshot.players.find((p) => p.id === prevActiveId);
-        const currentOpponent = snapshot.players.find((p) => p.id === prevActiveId);
-        const cardCountDecreased =
-          prevOpponent && currentOpponent && currentOpponent.cardCount < prevOpponent.cardCount;
+    const isGameplay =
+      prevSnapshot.phase === "playing" &&
+      snapshot.phase === "playing" &&
+      prevSnapshot.matchStatus === "round-active" &&
+      snapshot.matchStatus === "round-active" &&
+      prevSnapshot.roundNumber === snapshot.roundNumber;
 
-        if (cardCountDecreased) {
-          const cardToFly = findCard(currentDiscardId);
-          const opponentSeatEl =
-            document.querySelector(`[data-player-id="${prevActiveId}"]`) ||
-            document.querySelector(`.player-seat[aria-label*="${prevOpponent.name}"]`);
+    const newFlights: FlightRequest[] = [];
 
-          const fromRect = getElementCoordinates(opponentSeatEl, {
-            x: 300,
-            y: 100,
+    if (isGameplay) {
+      if (discardChanged) {
+        const prevActiveId = prevSnapshot.currentPlayerId;
+        if (prevActiveId && prevActiveId !== snapshot.viewerId) {
+          const prevOpponent = prevSnapshot.players.find((p) => p.id === prevActiveId);
+          const currentOpponent = snapshot.players.find((p) => p.id === prevActiveId);
+          const cardCountDecreased =
+            prevOpponent && currentOpponent && currentOpponent.cardCount < prevOpponent.cardCount;
+
+          if (cardCountDecreased) {
+            const cardToFly = findCard(currentDiscardId);
+            const opponentSeatEl =
+              document.querySelector(`[data-player-id="${prevActiveId}"]`) ||
+              document.querySelector(`.player-seat[aria-label*="${prevOpponent.name}"]`);
+
+            const fromRect = getElementCoordinates(opponentSeatEl, {
+              x: 300,
+              y: 100,
+              width: 80,
+              height: 120,
+            });
+            const toRect = getElementCoordinates(discardPileRef.current, {
+              x: 400,
+              y: 300,
+              width: 80,
+              height: 120,
+            });
+
+            const flightId = `flight-opponent-${prevActiveId}-${Date.now()}`;
+            newFlights.push({
+              id: flightId,
+              card: cardToFly,
+              fromRect,
+              toRect,
+              duration: flightDuration,
+            });
+          }
+        }
+      }
+
+      // Local player draw flights
+      const prevHandIds = new Set(prevSnapshot.hand.map((h) => h.instanceId));
+      const newlyDrawnCards = snapshot.hand.filter((h) => !prevHandIds.has(h.instanceId));
+
+      if (newlyDrawnCards.length > 0) {
+        const newCardIds = newlyDrawnCards.map((c) => c.instanceId);
+        setHiddenCardIds((prev) => [...prev, ...newCardIds]);
+
+        const drawFromRect = getElementCoordinates(drawPileRef.current, {
+          x: 250,
+          y: 300,
+          width: 80,
+          height: 120,
+        });
+
+        const bottomHandEl = document.querySelector(".player-seat--bottom .player-seat__hand");
+        const handRect = getElementCoordinates(bottomHandEl, {
+          x: 300,
+          y: 600,
+          width: 400,
+          height: 120,
+        });
+
+        newlyDrawnCards.forEach((cardItem, index) => {
+          const cardDef = findCard(cardItem.faceId);
+          const cardEl = document.querySelector(`[data-card-instance-id="${cardItem.instanceId}"]`);
+          const toRect = getElementCoordinates(cardEl, {
+            x: handRect.x + index * 40,
+            y: handRect.y,
             width: 80,
             height: 120,
           });
-          const toRect = getElementCoordinates(discardPileRef.current, {
-            x: 400,
-            y: 300,
-            width: 80,
-            height: 120,
-          });
 
-          const flightId = `flight-opponent-${prevActiveId}-${Date.now()}`;
-          const newFlight: FlightRequest = {
-            id: flightId,
-            card: cardToFly,
-            fromRect,
+          newFlights.push({
+            id: `flight-draw-viewer-${cardItem.instanceId}`,
+            card: cardDef,
+            fromRect: drawFromRect,
             toRect,
             duration: flightDuration,
-          };
-
-          setActiveFlights((prev) => {
-            const next = [...prev, newFlight];
-            activeFlightsRef.current = next;
-            return next;
+            delay: index * 0.06,
+            onComplete: () => {
+              setHiddenCardIds((prev) => prev.filter((id) => id !== cardItem.instanceId));
+            },
           });
-          return;
+        });
+      }
+
+      // Opponent draw flights
+      if (snapshot.drawCount < prevSnapshot.drawCount) {
+        for (const player of snapshot.players) {
+          if (player.id === snapshot.viewerId) continue;
+          const prevPlayer = prevSnapshot.players.find((p) => p.id === player.id);
+          if (prevPlayer && player.cardCount > prevPlayer.cardCount) {
+            const countDrawn = player.cardCount - prevPlayer.cardCount;
+            const opponentSeatEl =
+              document.querySelector(`[data-player-id="${player.id}"]`) ||
+              document.querySelector(`.player-seat[aria-label*="${player.name}"]`);
+            const toRect = getElementCoordinates(opponentSeatEl, {
+              x: 300,
+              y: 100,
+              width: 80,
+              height: 120,
+            });
+            const drawFromRect = getElementCoordinates(drawPileRef.current, {
+              x: 250,
+              y: 300,
+              width: 80,
+              height: 120,
+            });
+
+            for (let i = 0; i < countDrawn; i++) {
+              newFlights.push({
+                id: `flight-draw-opponent-${player.id}-${i}-${Date.now()}`,
+                card: cardBack,
+                fromRect: drawFromRect,
+                toRect,
+                duration: flightDuration,
+                delay: i * 0.06,
+              });
+            }
+          }
         }
       }
     }
 
-    const hasDiscardFlight = activeFlightsRef.current.some(
-      (f) => f.id.startsWith("flight-play-") || f.id.startsWith("flight-opponent-"),
-    );
+    if (newFlights.length > 0) {
+      setActiveFlights((prev) => {
+        const next = [...prev, ...newFlights];
+        activeFlightsRef.current = next;
+        return next;
+      });
+    }
+
+    const hasDiscardFlight =
+      activeFlightsRef.current.some(
+        (f) => f.id.startsWith("flight-play-") || f.id.startsWith("flight-opponent-"),
+      ) ||
+      newFlights.some(
+        (f) => f.id.startsWith("flight-play-") || f.id.startsWith("flight-opponent-"),
+      );
     if (!hasDiscardFlight) {
       setVisualTopDiscard(snapshot.topDiscard ? findCard(snapshot.topDiscard.faceId) : null);
     }
@@ -199,6 +321,8 @@ export function LiveGameScreen({
     if (isReconnecting || !snapshot.legalCardIds.includes(cardId)) {
       return;
     }
+
+    flushFlights();
 
     const playedCardItem = snapshot.hand.find((h) => h.instanceId === cardId);
     const cardIndex = snapshot.hand.findIndex((h) => h.instanceId === cardId);
@@ -305,6 +429,7 @@ export function LiveGameScreen({
           disabled={isReconnecting}
           eliminated={viewer.eliminated}
           hiddenCardInstanceId={hiddenCardInstanceId}
+          hiddenCardIds={hiddenCardIds}
           legalCardIds={snapshot.legalCardIds}
           name={viewer.name}
           online={viewer.online}
@@ -320,11 +445,13 @@ export function LiveGameScreen({
       <div className="table-center">
         <div className="play-zone">
           <button
+            ref={drawPileRef}
             aria-label={drawAndPass ? "Draw one card and pass" : "Draw cards from draw pile"}
             className="pile pile--draw"
             disabled={!canDraw || isReconnecting}
             onClick={() => {
               if (canDraw && !isReconnecting) {
+                flushFlights();
                 onCommand({ type: drawAndPass ? "draw-and-pass" : "draw-until-playable" });
               }
             }}
@@ -375,6 +502,7 @@ export function LiveGameScreen({
               disabled={isReconnecting}
               onClick={() => {
                 if (!isReconnecting) {
+                  flushFlights();
                   onCommand({ type: "accept-draw" });
                 }
               }}
@@ -393,6 +521,7 @@ export function LiveGameScreen({
         disabled={!canUno || isReconnecting}
         onClick={() => {
           if (!isReconnecting && canUno) {
+            flushFlights();
             onCommand({ type: "declare-uno" });
           }
         }}
@@ -408,16 +537,19 @@ export function LiveGameScreen({
           choice={snapshot.pendingChoice}
           onChooseColor={(color: CardColor) => {
             if (!isReconnecting) {
+              flushFlights();
               onCommand({ type: "choose-color", color });
             }
           }}
           onChooseRouletteColor={(color: CardColor) => {
             if (!isReconnecting) {
+              flushFlights();
               onCommand({ type: "choose-roulette-color", color });
             }
           }}
           onChooseSwapTarget={(targetPlayerId: string) => {
             if (!isReconnecting) {
+              flushFlights();
               onCommand({ type: "choose-swap-target", targetPlayerId });
             }
           }}

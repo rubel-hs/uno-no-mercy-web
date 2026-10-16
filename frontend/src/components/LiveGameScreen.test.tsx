@@ -481,6 +481,207 @@ describe("LiveGameScreen", () => {
       expect(within(discardPile).queryByRole("article", { name: "blue 5 card" })).not.toBeInTheDocument();
     });
 
+    test("animates draw flight from draw pile into player hand with staging", async () => {
+      const initialSnapshot = createGameSnapshot({
+        hand: [
+          { instanceId: "card-1", faceId: "red-5" },
+          { instanceId: "card-2", faceId: "blue-draw-2" },
+        ],
+      });
+
+      const { rerender } = render(
+        <LiveGameScreen flightDuration={0.01} onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={initialSnapshot} />,
+      );
+
+      const updatedSnapshot = createGameSnapshot({
+        hand: [
+          { instanceId: "card-1", faceId: "red-5" },
+          { instanceId: "card-2", faceId: "blue-draw-2" },
+          { instanceId: "card-3", faceId: "wild-draw-6" },
+        ],
+        drawCount: 119,
+      });
+
+      rerender(
+        <LiveGameScreen flightDuration={0.01} onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={updatedSnapshot} />,
+      );
+
+      const drawFlight = screen.getByTestId(/card-flight-flight-draw-viewer-card-3/);
+      expect(drawFlight).toBeInTheDocument();
+      expect(within(drawFlight).getByRole("article", { name: "Wild Draw 6 card" })).toBeInTheDocument();
+
+      const stagedCard = document.querySelector('[data-card-instance-id="card-3"]')!;
+      expect(stagedCard).toBeInTheDocument();
+      expect(stagedCard).toHaveClass("is-staged-hidden");
+      expect(stagedCard).toHaveStyle({ visibility: "hidden" });
+
+      await waitFor(() => {
+        expect(stagedCard).not.toHaveClass("is-staged-hidden");
+      });
+      expect(stagedCard).not.toHaveStyle({ visibility: "hidden" });
+    });
+
+    test("animates staggered draw flights for multi-card draw", async () => {
+      const initialSnapshot = createGameSnapshot({
+        hand: [{ instanceId: "card-1", faceId: "red-5" }],
+      });
+
+      const { rerender } = render(
+        <LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={initialSnapshot} />,
+      );
+
+      const updatedSnapshot = createGameSnapshot({
+        hand: [
+          { instanceId: "card-1", faceId: "red-5" },
+          { instanceId: "card-2", faceId: "blue-draw-2" },
+          { instanceId: "card-3", faceId: "wild-draw-6" },
+        ],
+        drawCount: 118,
+      });
+
+      rerender(
+        <LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={updatedSnapshot} />,
+      );
+
+      const flight1 = screen.getByTestId(/card-flight-flight-draw-viewer-card-2/);
+      const flight2 = screen.getByTestId(/card-flight-flight-draw-viewer-card-3/);
+      expect(flight1).toBeInTheDocument();
+      expect(flight2).toBeInTheDocument();
+
+      expect(document.querySelector('[data-card-instance-id="card-2"]')).toHaveClass("is-staged-hidden");
+      expect(document.querySelector('[data-card-instance-id="card-3"]')).toHaveClass("is-staged-hidden");
+    });
+
+    test("animates opponent draw flight from draw pile to opponent seat when opponent card count increases and drawCount decreases", async () => {
+      const initialSnapshot = createGameSnapshot({
+        players: [
+          { id: "p1", name: "Alice", order: 0, cardCount: 3, online: true, eliminated: false },
+          { id: "p2", name: "Bob", order: 1, cardCount: 3, online: true, eliminated: false },
+        ],
+        drawCount: 100,
+      });
+
+      const { rerender } = render(
+        <LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={initialSnapshot} />,
+      );
+
+      const updatedSnapshot = createGameSnapshot({
+        players: [
+          { id: "p1", name: "Alice", order: 0, cardCount: 3, online: true, eliminated: false },
+          { id: "p2", name: "Bob", order: 1, cardCount: 5, online: true, eliminated: false },
+        ],
+        drawCount: 98,
+      });
+
+      rerender(
+        <LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={updatedSnapshot} />,
+      );
+
+      const opponentFlights = screen.getAllByTestId(/card-flight-flight-draw-opponent-p2/);
+      expect(opponentFlights).toHaveLength(2);
+      expect(within(opponentFlights[0]).getByRole("article", { name: /card back/i })).toBeInTheDocument();
+    });
+
+    test("skips draw flight on initial game deal or round start", async () => {
+      const initialSnapshot = createGameSnapshot({
+        phase: "lobby",
+        hand: [],
+      });
+
+      const { rerender } = render(
+        <LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={initialSnapshot} />,
+      );
+
+      const updatedSnapshot = createGameSnapshot({
+        phase: "playing",
+        hand: [
+          { instanceId: "card-1", faceId: "red-5" },
+          { instanceId: "card-2", faceId: "blue-draw-2" },
+        ],
+      });
+
+      rerender(
+        <LiveGameScreen onCommand={vi.fn()} onLeaveRoom={vi.fn()} snapshot={updatedSnapshot} />,
+      );
+
+      expect(screen.queryByTestId(/card-flight-flight-draw-/)).not.toBeInTheDocument();
+    });
+
+    test("immediately flushes pending flights when player initiates a play action", async () => {
+      const onCommand = vi.fn();
+      const initialSnapshot = createGameSnapshot({
+        hand: [
+          { instanceId: "card-1", faceId: "red-5" },
+          { instanceId: "card-2", faceId: "blue-draw-2" },
+        ],
+        legalCardIds: ["card-1"],
+      });
+
+      const { rerender } = render(
+        <LiveGameScreen onCommand={onCommand} onLeaveRoom={vi.fn()} snapshot={initialSnapshot} />,
+      );
+
+      const updatedSnapshot = createGameSnapshot({
+        hand: [
+          { instanceId: "card-1", faceId: "red-5" },
+          { instanceId: "card-2", faceId: "blue-draw-2" },
+          { instanceId: "card-3", faceId: "wild-draw-6" },
+        ],
+        drawCount: 119,
+        legalCardIds: ["card-1"],
+      });
+
+      rerender(
+        <LiveGameScreen onCommand={onCommand} onLeaveRoom={vi.fn()} snapshot={updatedSnapshot} />,
+      );
+
+      expect(screen.getByTestId(/card-flight-flight-draw-viewer-card-3/)).toBeInTheDocument();
+      expect(document.querySelector('[data-card-instance-id="card-3"]')).toHaveClass("is-staged-hidden");
+
+      const card1El = document.querySelector('[data-card-instance-id="card-1"]')!;
+      fireEvent.click(card1El);
+
+      expect(screen.queryByTestId(/card-flight-flight-draw-viewer-card-3/)).not.toBeInTheDocument();
+      expect(document.querySelector('[data-card-instance-id="card-3"]')).not.toHaveClass("is-staged-hidden");
+      expect(onCommand).toHaveBeenCalledWith({ type: "play-card", cardId: "card-1" });
+      expect(screen.getByTestId(/card-flight-flight-play-card-1/)).toBeInTheDocument();
+    });
+
+    test("immediately flushes pending flights when player clicks draw pile", async () => {
+      const onCommand = vi.fn();
+      const initialSnapshot = createGameSnapshot({
+        hand: [{ instanceId: "card-1", faceId: "red-5" }],
+        allowedControls: ["draw-until-playable"],
+      });
+
+      const { rerender } = render(
+        <LiveGameScreen onCommand={onCommand} onLeaveRoom={vi.fn()} snapshot={initialSnapshot} />,
+      );
+
+      const updatedSnapshot = createGameSnapshot({
+        hand: [
+          { instanceId: "card-1", faceId: "red-5" },
+          { instanceId: "card-2", faceId: "blue-draw-2" },
+        ],
+        drawCount: 119,
+        allowedControls: ["draw-until-playable"],
+      });
+
+      rerender(
+        <LiveGameScreen onCommand={onCommand} onLeaveRoom={vi.fn()} snapshot={updatedSnapshot} />,
+      );
+
+      expect(screen.getByTestId(/card-flight-flight-draw-viewer-card-2/)).toBeInTheDocument();
+      expect(document.querySelector('[data-card-instance-id="card-2"]')).toHaveClass("is-staged-hidden");
+
+      const drawButton = screen.getByRole("button", { name: /draw cards|draw pile/i });
+      fireEvent.click(drawButton);
+
+      expect(screen.queryByTestId(/card-flight-flight-draw-viewer-card-2/)).not.toBeInTheDocument();
+      expect(document.querySelector('[data-card-instance-id="card-2"]')).not.toHaveClass("is-staged-hidden");
+      expect(onCommand).toHaveBeenCalledWith({ type: "draw-until-playable" });
+    });
+
     test("clicking draw pile sends draw-until-playable when allowed", () => {
       const onCommand = vi.fn();
       const snapshot = createGameSnapshot({
